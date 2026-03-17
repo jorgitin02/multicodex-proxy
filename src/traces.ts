@@ -1,6 +1,7 @@
 import { estimateCostUsd } from "./model-pricing.js";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { TRACE_COMPACTION_INTERVAL } from "./config.js";
 
 export type TraceEntry = {
   id: string;
@@ -457,6 +458,8 @@ export function createTraceManager(config: TraceManagerConfig) {
   const traceCache: TraceEntry[] = [];
   const statsCache: TraceEntry[] = [];
   let cacheInit: Promise<void> | null = null;
+  let appendSinceCompaction = 0;
+  let compactionQueued = false;
 
   async function readTraceFileFromDisk(): Promise<TraceEntry[]> {
     try {
@@ -483,9 +486,6 @@ export function createTraceManager(config: TraceManagerConfig) {
               if (normalized) parsed.push(normalized);
             } catch {}
           }
-          
-          // Limit memory usage by stopping if we have enough entries
-          if (parsed.length >= retentionMax) break;
         }
         
         // Process any remaining data
@@ -591,6 +591,12 @@ export function createTraceManager(config: TraceManagerConfig) {
       await fileHandle.close();
     }
     await fs.rename(tmp, filePath);
+  }
+
+  async function appendTraceLine(entry: TraceEntry): Promise<void> {
+    const json = JSON.stringify(entry);
+    if (json.length > 1024 * 1024) return;
+    await fs.appendFile(filePath, `${json}\n`, "utf8");
   }
 
   function toStatsHistoryEntry(entry: TraceEntry): TraceEntry {
@@ -725,6 +731,22 @@ export function createTraceManager(config: TraceManagerConfig) {
     } catch {}
   }
 
+  function queueCompactionIfNeeded() {
+    if (compactionQueued) return;
+    if (traceCache.length <= retentionMax && appendSinceCompaction < TRACE_COMPACTION_INTERVAL) {
+      return;
+    }
+    compactionQueued = true;
+    traceWriteQueue = traceWriteQueue.then(async () => {
+      try {
+        await writeTraceWindow(traceCache.slice(-retentionMax));
+        appendSinceCompaction = 0;
+      } finally {
+        compactionQueued = false;
+      }
+    });
+  }
+
   async function appendTrace(
     entry: Omit<
       TraceEntry,
@@ -752,7 +774,9 @@ export function createTraceManager(config: TraceManagerConfig) {
       if (traceCache.length > retentionMax) {
         traceCache.splice(0, traceCache.length - retentionMax);
       }
-      await writeTraceWindow(traceCache);
+      appendSinceCompaction += 1;
+      await appendTraceLine(finalEntry);
+      queueCompactionIfNeeded();
     });
     traceWriteQueue = run.catch(() => undefined);
     await Promise.all([run, appendStatsHistory(finalEntry)]);

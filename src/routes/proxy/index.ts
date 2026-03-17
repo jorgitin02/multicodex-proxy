@@ -1,15 +1,16 @@
 import {
   MAX_ACCOUNT_RETRY_ATTEMPTS,
-  MAX_UPSTREAM_RETRIES,
+  MAX_GET_RETRIES,
   MODELS_CACHE_MS,
   MODELS_CLIENT_VERSION,
+  MODEL_DISCOVERY_TIMEOUT_MS,
   PI_USER_AGENT,
   PROXY_MODELS,
+  RETRY_BASE_DELAY_MS,
   TRACE_INCLUDE_BODY,
-  TOKEN_REFRESH_MARGIN_MS,
-  UPSTREAM_BASE_DELAY_MS,
   UPSTREAM_PATH,
   UPSTREAM_COMPACT_PATH,
+  UPSTREAM_REQUEST_TIMEOUT_MS,
 } from "../../config.js";
 import {
   chatCompletionObjectToSSE,
@@ -28,7 +29,11 @@ import {
 } from "../../responses/payloads.js";
 import {
   chooseAccountForProvider,
+  accountSupportsModel,
   isQuotaErrorText,
+  markModelCompatibility,
+  markAuthFailure,
+  markModelUnsupported,
   markQuotaHit,
   normalizeProvider,
   refreshUsageIfNeeded,
@@ -221,7 +226,7 @@ async function discoverModels(
         const url = `${openaiBaseUrl}/backend-api/codex/models?client_version=${encodeURIComponent(
           MODELS_CLIENT_VERSION,
         )}`;
-        const r = await fetch(url, { headers });
+        const r = await fetchCodexWithRetry(url, { headers });
         if (r.ok) {
           const json: any = await r.json();
           const upstream = Array.isArray(json?.models) ? json.models : [];
@@ -246,7 +251,9 @@ async function discoverModels(
           authorization: `Bearer ${mistralAccount.accessToken}`,
           accept: "application/json",
         };
-        const r = await fetch(`${mistralBaseUrl}/v1/models`, { headers });
+        const r = await fetchCodexWithRetry(`${mistralBaseUrl}/v1/models`, {
+          headers,
+        });
         if (r.ok) {
           const json: any = await r.json();
           const upstream = Array.isArray(json?.data) ? json.data : [];
@@ -365,6 +372,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function createRequestSignal(
+  timeoutMs: number,
+  upstreamAbort?: AbortSignal,
+): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  const onAbort = () => controller.abort(upstreamAbort?.reason);
+  if (upstreamAbort) {
+    if (upstreamAbort.aborted) {
+      controller.abort(upstreamAbort.reason);
+    } else {
+      upstreamAbort.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timer);
+      if (upstreamAbort) upstreamAbort.removeEventListener("abort", onAbort);
+    },
+    { once: true },
+  );
+  return controller.signal;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || /timed out|aborted/i.test(error.message))
+  );
+}
+
 function isRetryableUpstreamError(status: number, errorText: string): boolean {
   if (
     status === 429 ||
@@ -379,34 +420,62 @@ function isRetryableUpstreamError(status: number, errorText: string): boolean {
   );
 }
 
+function isAuthFailure(status: number, errorText: string): boolean {
+  if (status === 401) return true;
+  return /token_expired|invalid[_ -]?token|refresh[_ -]?token|unauthorized|auth/i.test(
+    errorText,
+  );
+}
+
+function isModelUnsupported(status: number, errorText: string): boolean {
+  if (status !== 400 && status !== 404) return false;
+  return /model.+not supported|unsupported model|does not exist|not available|unknown model/i.test(
+    errorText,
+  );
+}
+
 async function fetchCodexWithRetry(
   url: string,
   init: RequestInit,
+  signal?: AbortSignal,
 ): Promise<Response> {
   let lastError: Error | undefined;
-  for (let attempt = 0; attempt <= MAX_UPSTREAM_RETRIES; attempt++) {
+  const maxAttempts = Math.max(0, MAX_GET_RETRIES);
+  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await fetch(url, init);
+      const response = await fetch(url, {
+        ...init,
+        signal: createRequestSignal(MODEL_DISCOVERY_TIMEOUT_MS, signal),
+      });
       if (response.ok) return response;
       const errorText = await response
         .clone()
         .text()
         .catch(() => "");
       if (
-        attempt < MAX_UPSTREAM_RETRIES &&
+        attempt < maxAttempts &&
         isRetryableUpstreamError(response.status, errorText)
       ) {
-        await sleep(UPSTREAM_BASE_DELAY_MS * 2 ** attempt);
+        await sleep(
+          Math.floor(
+            RETRY_BASE_DELAY_MS * 2 ** attempt * (0.5 + Math.random()),
+          ),
+        );
         continue;
       }
       return response;
     } catch (error: any) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (
-        attempt < MAX_UPSTREAM_RETRIES &&
-        !lastError.message.includes("usage limit")
+        attempt < maxAttempts &&
+        !lastError.message.includes("usage limit") &&
+        !isAbortError(lastError)
       ) {
-        await sleep(UPSTREAM_BASE_DELAY_MS * 2 ** attempt);
+        await sleep(
+          Math.floor(
+            RETRY_BASE_DELAY_MS * 2 ** attempt * (0.5 + Math.random()),
+          ),
+        );
         continue;
       }
       throw lastError;
@@ -443,6 +512,16 @@ export function createProxyRouter(options: ProxyRoutesOptions) {
       (req.originalUrl || "").includes("responses/compact");
     const clientRequestedStream = Boolean(req.body?.stream);
     const sessionId = getSessionId(req);
+    const clientAbort = new AbortController();
+    const abortFromClient = () => {
+      if (!clientAbort.signal.aborted) {
+        clientAbort.abort(new Error("downstream client disconnected"));
+      }
+    };
+    req.on("aborted", abortFromClient);
+    res.on("close", () => {
+      if (!res.writableEnded) abortFromClient();
+    });
 
 let accounts = store.getCachedAccounts();
     if (!accounts.length)
@@ -476,7 +555,9 @@ let accounts = store.getCachedAccounts();
 
     for (const candidate of routingCandidates) {
       const providerAccounts = accounts.filter(
-        (a) => normalizeProvider(a) === candidate.provider,
+        (a) =>
+          normalizeProvider(a) === candidate.provider &&
+          accountSupportsModel(a, candidate.resolvedModel ?? requestModel),
       );
       if (!providerAccounts.length) continue;
       providerTried = true;
@@ -543,17 +624,26 @@ let accounts = store.getCachedAccounts();
             : isResponsesCompactPath
               ? UPSTREAM_COMPACT_PATH
               : UPSTREAM_PATH;
-        const upstream = await fetchCodexWithRetry(
-          `${upstreamBaseUrl}${upstreamPath}`,
-          {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payloadToUpstream),
-          },
-        );
+        const upstream = await fetch(`${upstreamBaseUrl}${upstreamPath}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payloadToUpstream),
+          signal: createRequestSignal(
+            UPSTREAM_REQUEST_TIMEOUT_MS,
+            clientAbort.signal,
+          ),
+        });
 
         const contentType = upstream.headers.get("content-type") ?? "";
         const isStream = contentType.includes("text/event-stream");
+        if (upstream.ok) {
+          markModelCompatibility(
+            selected,
+            candidate.resolvedModel ?? requestModel,
+            true,
+          );
+          await store.upsertAccount(selected);
+        }
 
         if (isStream) {
           if (shouldReturnChatCompletions && clientRequestedStream) {
@@ -1056,11 +1146,19 @@ let accounts = store.getCachedAccounts();
           return;
         }
 
-        res.status(upstream.status);
-        setForwardHeaders(upstream, res);
-        res.type(contentType || "application/json").send(text);
-
         const usage = extractUsageFromPayload(parsed);
+        const quotaFailure =
+          upstream.status === 429 || isQuotaErrorText(text);
+        const authFailure = isAuthFailure(upstream.status, text);
+        const modelUnsupported = isModelUnsupported(upstream.status, text);
+        const shouldRotateAccount =
+          !upstream.ok &&
+          (quotaFailure || authFailure || modelUnsupported);
+
+        if (!shouldRotateAccount) {
+          res.status(upstream.status);
+          res.type(contentType || "application/json").send(text);
+        }
 
         await appendTrace({
           at: Date.now(),
@@ -1080,8 +1178,23 @@ let accounts = store.getCachedAccounts();
         });
 
         if (upstream.ok) return;
-        if (upstream.status === 429 || isQuotaErrorText(text)) {
+        if (quotaFailure) {
           markQuotaHit(selected, `quota/rate-limit: ${upstream.status}`);
+          await store.upsertAccount(selected);
+          continue;
+        }
+        if (authFailure) {
+          markAuthFailure(selected, `auth failure: ${upstream.status}`);
+          await store.upsertAccount(selected);
+          continue;
+        }
+        if (modelUnsupported) {
+          const failedModel =
+            candidate.resolvedModel ?? requestModel ?? "unknown-model";
+          markModelUnsupported(
+            selected,
+            `model unsupported for ${failedModel}: ${upstream.status}`,
+          );
           await store.upsertAccount(selected);
           continue;
         }
@@ -1094,6 +1207,7 @@ let accounts = store.getCachedAccounts();
         return;
       } catch (err: any) {
         const msg = err?.message ?? String(err);
+        const status = clientAbort.signal.aborted ? 499 : 599;
         rememberError(selected, msg);
         await store.upsertAccount(selected);
         await appendTrace({
@@ -1102,12 +1216,13 @@ let accounts = store.getCachedAccounts();
           accountId: selected.id,
           accountEmail: selected.email,
           model: tracedModel,
-          status: 599,
+          status,
           stream: false,
           latencyMs: Date.now() - startedAt,
           error: msg,
           requestBody,
         });
+        if (clientAbort.signal.aborted) return;
       }
     }
     }
