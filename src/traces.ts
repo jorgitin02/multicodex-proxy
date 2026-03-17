@@ -2,6 +2,7 @@ import { estimateCostUsd } from "./model-pricing.js";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { TRACE_COMPACTION_INTERVAL } from "./config.js";
 
 export type TraceEntry = {
   id: string;
@@ -529,6 +530,8 @@ export function createTraceManager(config: TraceManagerConfig) {
   const statsBuckets = new Map<number, TraceBucketAggregate>();
   let totalStored = 0;
   let cacheInit: Promise<void> | null = null;
+  let appendSinceCompaction = 0;
+  let compactionQueued = false;
 
   async function ensureParentDir(file: string) {
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -538,12 +541,40 @@ export function createTraceManager(config: TraceManagerConfig) {
     try {
       const raw = await fs.readFile(filePath, "utf8");
       const parsed: TraceEntry[] = [];
-      for (const line of raw.split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          const normalized = normalizeTrace(JSON.parse(line));
-          if (normalized) parsed.push(normalized);
-        } catch {}
+      const fileHandle = await fs.open(filePath, 'r');
+      let position = 0;
+      let buffer = Buffer.alloc(65536); // 64KB buffer
+      let remaining = '';
+
+      try {
+        while (true) {
+          const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, position);
+          if (bytesRead === 0) break;
+
+          position += bytesRead;
+          const chunk = remaining + buffer.toString('utf8', 0, bytesRead);
+          const lines = chunk.split('\n');
+          remaining = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const normalized = normalizeTrace(JSON.parse(line));
+              if (normalized) parsed.push(normalized);
+            } catch {}
+          }
+        }
+
+        // Process any remaining data
+        if (remaining.trim()) {
+          try {
+            const normalized = normalizeTrace(JSON.parse(remaining));
+            if (normalized) parsed.push(normalized);
+          } catch {}
+        }
+
+      } finally {
+        await fileHandle.close();
       }
       return parsed.slice(-retentionMax);
     } catch {
@@ -625,6 +656,12 @@ export function createTraceManager(config: TraceManagerConfig) {
       await fileHandle.close();
     }
     await fs.rename(tmp, filePath);
+  }
+
+  async function appendTraceLine(entry: TraceEntry): Promise<void> {
+    const json = JSON.stringify(entry);
+    if (json.length > 1024 * 1024) return;
+    await fs.appendFile(filePath, `${json}\n`, "utf8");
   }
 
   function toStatsHistoryEntry(entry: TraceEntry): TraceEntry {
@@ -853,6 +890,22 @@ export function createTraceManager(config: TraceManagerConfig) {
     };
   }
 
+  function queueCompactionIfNeeded() {
+    if (compactionQueued) return;
+    if (traceCache.length <= retentionMax && appendSinceCompaction < TRACE_COMPACTION_INTERVAL) {
+      return;
+    }
+    compactionQueued = true;
+    traceWriteQueue = traceWriteQueue.then(async () => {
+      try {
+        await writeTraceWindow(traceCache.slice(-retentionMax));
+        appendSinceCompaction = 0;
+      } finally {
+        compactionQueued = false;
+      }
+    });
+  }
+
   async function appendTrace(
     entry: Omit<
       TraceEntry,
@@ -881,8 +934,9 @@ export function createTraceManager(config: TraceManagerConfig) {
       if (traceCache.length > retentionMax) {
         traceCache.splice(0, traceCache.length - retentionMax);
       }
-      await ensureParentDir(filePath);
-      await fs.appendFile(filePath, line, "utf8");
+      appendSinceCompaction += 1;
+      await appendTraceLine(finalEntry);
+      queueCompactionIfNeeded();
     });
     traceWriteQueue = run.catch(() => undefined);
     await Promise.all([run, appendStatsHistory(finalEntry)]);

@@ -1,16 +1,22 @@
 import type { Account, ProviderId, UsageSnapshot } from "./types.js";
+import { MODEL_COMPATIBILITY_TTL_MS } from "./config.js";
 
 export const USAGE_CACHE_TTL_MS = Number(process.env.USAGE_CACHE_TTL_MS ?? 300_000);
 const USAGE_TIMEOUT_MS = Number(process.env.USAGE_TIMEOUT_MS ?? 10_000);
 const BLOCK_FALLBACK_MS = Number(process.env.BLOCK_FALLBACK_MS ?? 30 * 60_000);
-const DEFAULT_ROUTING_WINDOW_MS = Number(process.env.ROUTING_WINDOW_MS ?? 5 * 60 * 1000);
+const DEFAULT_ROUTING_WINDOW_MS = Number(process.env.ROUTING_WINDOW_MS ?? 0);
+const AUTH_FALLBACK_MS = Number(process.env.AUTH_FALLBACK_MS ?? 60 * 60_000);
+const MODEL_FALLBACK_MS = Number(process.env.MODEL_FALLBACK_MS ?? 10 * 60_000);
 
 type RouteCache = {
-  bucket: number;
   accountId?: string;
+  bucketByWindowMs: Map<number, number>;
 };
 
-const routeCache: RouteCache = { bucket: -1, accountId: undefined };
+const routeCache: RouteCache = {
+  accountId: undefined,
+  bucketByWindowMs: new Map(),
+};
 
 export function normalizeProvider(account?: Account): ProviderId {
   if (account?.provider === "mistral") return "mistral";
@@ -95,9 +101,49 @@ export function accountUsable(a: Account): boolean {
   return !(typeof until === "number" && Date.now() < until);
 }
 
+function normalizeModelKey(model?: string): string {
+  const raw = (model ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  if (!raw.includes("/")) return raw;
+  return raw.split("/").pop() ?? raw;
+}
+
+export function accountSupportsModel(account: Account, model?: string): boolean {
+  const key = normalizeModelKey(model);
+  if (!key) return true;
+  const record = account.state?.modelAvailability?.[key];
+  if (!record) return true;
+  if (Date.now() - record.checkedAt > MODEL_COMPATIBILITY_TTL_MS) return true;
+  return record.supported;
+}
+
+export function markModelCompatibility(
+  account: Account,
+  model: string | undefined,
+  supported: boolean,
+  reason?: string,
+) {
+  const key = normalizeModelKey(model);
+  if (!key) return;
+  account.state = {
+    ...account.state,
+    modelAvailability: {
+      ...(account.state?.modelAvailability ?? {}),
+      [key]: {
+        supported,
+        checkedAt: Date.now(),
+        reason,
+      },
+    },
+  };
+}
+
 export function chooseAccount(accounts: Account[]): Account | null {
   const now = Date.now();
-  const windowMs = Number.isFinite(DEFAULT_ROUTING_WINDOW_MS) && DEFAULT_ROUTING_WINDOW_MS > 0 ? DEFAULT_ROUTING_WINDOW_MS : 5 * 60 * 1000;
+  const windowMs =
+    Number.isFinite(DEFAULT_ROUTING_WINDOW_MS) && DEFAULT_ROUTING_WINDOW_MS > 0
+      ? DEFAULT_ROUTING_WINDOW_MS
+      : 0;
 
   const available = accounts.filter((a) => {
     if (!a.enabled) return false;
@@ -106,11 +152,13 @@ export function chooseAccount(accounts: Account[]): Account | null {
   });
   if (!available.length) return null;
 
-  const bucket = nowBucket(now, windowMs);
-
-  if (routeCache.bucket === bucket && routeCache.accountId) {
-    const sticky = available.find((a) => a.id === routeCache.accountId);
-    if (sticky) return sticky;
+  if (windowMs > 0) {
+    const bucket = nowBucket(now, windowMs);
+    const stickyBucket = routeCache.bucketByWindowMs.get(windowMs);
+    if (stickyBucket === bucket && routeCache.accountId) {
+      const sticky = available.find((a) => a.id === routeCache.accountId);
+      if (sticky) return sticky;
+    }
   }
 
   const untouched = available.filter((a) => {
@@ -122,6 +170,14 @@ export function chooseAccount(accounts: Account[]): Account | null {
   const pool = untouched.length ? untouched : available;
 
   const sorted = [...pool].sort((a, b) => {
+    const ap = a.priority ?? Number.MAX_SAFE_INTEGER;
+    const bp = b.priority ?? Number.MAX_SAFE_INTEGER;
+    if (ap !== bp) return ap - bp;
+
+    const al = a.state?.lastSelectedAt ?? 0;
+    const bl = b.state?.lastSelectedAt ?? 0;
+    if (al !== bl) return al - bl;
+
     const sa = scoreAccount(a);
     const sb = scoreAccount(b);
     if (sa !== sb) return sa - sb;
@@ -130,16 +186,14 @@ export function chooseAccount(accounts: Account[]): Account | null {
     const br = b.usage?.secondary?.resetAt ?? Number.MAX_SAFE_INTEGER;
     if (ar !== br) return ar - br;
 
-    const ap = a.priority ?? Number.MAX_SAFE_INTEGER;
-    const bp = b.priority ?? Number.MAX_SAFE_INTEGER;
-    if (ap !== bp) return ap - bp;
-
     return a.id.localeCompare(b.id);
   });
 
   const winner = sorted[0] ?? null;
-  routeCache.bucket = bucket;
   routeCache.accountId = winner?.id;
+  if (windowMs > 0 && winner) {
+    routeCache.bucketByWindowMs.set(windowMs, nowBucket(now, windowMs));
+  }
 
   return winner;
 }
@@ -193,6 +247,27 @@ export function markQuotaHit(account: Account, message: string) {
   account.state = {
     ...account.state,
     blockedUntil: until,
+    blockedReason: message,
+  };
+  rememberError(account, message);
+}
+
+export function markAuthFailure(account: Account, message: string) {
+  account.state = {
+    ...account.state,
+    blockedUntil: Date.now() + AUTH_FALLBACK_MS,
+    blockedReason: message,
+    needsTokenRefresh: true,
+  };
+  rememberError(account, message);
+}
+
+export function markModelUnsupported(account: Account, message: string) {
+  const modelMatch = message.match(/for ([^:]+):/);
+  markModelCompatibility(account, modelMatch?.[1], false, message);
+  account.state = {
+    ...account.state,
+    blockedUntil: Date.now() + MODEL_FALLBACK_MS,
     blockedReason: message,
   };
   rememberError(account, message);
