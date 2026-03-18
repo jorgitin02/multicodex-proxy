@@ -2,7 +2,11 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { AccountStore, OAuthStateStore } from "../../store.js";
 import type { Account, ModelAlias } from "../../types.js";
-import { normalizeProvider, refreshUsageIfNeeded } from "../../quota.js";
+import {
+  clearAuthFailureState,
+  normalizeProvider,
+  refreshUsageIfNeeded,
+} from "../../quota.js";
 import {
   accountFromOAuth,
   buildAuthorizationUrl,
@@ -727,6 +731,7 @@ export function createAdminRouter(options: AdminRoutesOptions) {
       } else {
         account = accountFromOAuth(flow, tokenData);
       }
+      clearAuthFailureState(account);
       account = await refreshUsageIfNeeded(account, openaiBaseUrl, true);
       await store.upsertAccount(account);
       await oauthStore.update(flow.id, {

@@ -64,6 +64,43 @@ export function rememberError(account: Account, message: string) {
   account.state = { ...account.state, lastError: message, recentErrors: next };
 }
 
+function isAuthFailureReason(reason: unknown): reason is string {
+  return typeof reason === "string" && /^auth failure:/i.test(reason);
+}
+
+function isAuthRelatedErrorMessage(message: unknown): message is string {
+  return (
+    typeof message === "string" &&
+    /^(auth failure:|refresh token failed:|usage probe failed 401\b)/i.test(
+      message,
+    )
+  );
+}
+
+export function clearAuthFailureState(account: Account) {
+  const current = account.state;
+  if (!current) return;
+
+  const blockedByAuth = isAuthFailureReason(current.blockedReason);
+  const recentErrors = (current.recentErrors ?? []).filter(
+    (entry) => !isAuthRelatedErrorMessage(entry?.message),
+  );
+  const lastError = isAuthRelatedErrorMessage(current.lastError)
+    ? undefined
+    : current.lastError;
+
+  account.state = {
+    ...current,
+    blockedUntil: blockedByAuth ? undefined : current.blockedUntil,
+    blockedReason: blockedByAuth ? undefined : current.blockedReason,
+    needsTokenRefresh: false,
+    refreshFailureCount: 0,
+    refreshBlockedUntil: undefined,
+    lastError,
+    recentErrors: recentErrors.length ? recentErrors : undefined,
+  };
+}
+
 export function usageUntouched(usage?: UsageSnapshot): boolean {
   return usage?.primary?.usedPercent === 0 && usage?.secondary?.usedPercent === 0;
 }
@@ -232,6 +269,7 @@ export async function refreshUsageIfNeeded(account: Account, chatgptBaseUrl: str
     if (!res.ok) throw new Error(`usage probe failed ${res.status}`);
     const json = await res.json();
     account.usage = parseOpenAIUsage(json);
+    clearAuthFailureState(account);
     account.state = { ...account.state, lastError: undefined };
     return account;
   } catch (err: any) {
