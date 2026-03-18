@@ -210,3 +210,121 @@ test("proxy does not blindly retry generic upstream 500s for POST responses", as
     await upstream.close();
   }
 });
+
+test("successful proxy responses clear stale auth failure state", async () => {
+  const upstream = await startHttpServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/backend-api/wham/usage") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 0 },
+            secondary_window: { used_percent: 0 },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      req.url?.startsWith("/backend-api/codex/models")
+    ) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ models: [{ slug: "gpt-5.4" }] }));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(responseObject("OK")));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+
+  const tmp = await createTempDir();
+  const storePath = path.join(tmp, "accounts.json");
+  await writeJson(storePath, {
+    accounts: [
+      {
+        id: "acct-1",
+        provider: "openai",
+        accessToken: "acct-1-token",
+        enabled: true,
+        usage: { fetchedAt: Date.now(), primary: { usedPercent: 0 } },
+        state: {
+          blockedUntil: Date.now() + 60_000,
+          blockedReason: "auth failure: 401",
+          needsTokenRefresh: true,
+          refreshFailureCount: 3,
+          refreshBlockedUntil: Date.now() + 60_000,
+          lastError: "refresh token failed: token endpoint failed 401",
+          recentErrors: [
+            { at: Date.now(), message: "usage probe failed 401" },
+            { at: Date.now() - 1_000, message: "auth failure: 401" },
+            { at: Date.now() - 2_000, message: "quota/rate-limit: 429" },
+          ],
+        },
+      },
+    ],
+    modelAliases: [],
+  });
+  await writeJson(path.join(tmp, "oauth-state.json"), { states: [] });
+
+  const runtime = await startRuntime({
+    storePath,
+    oauthStatePath: path.join(tmp, "oauth-state.json"),
+    traceFilePath: path.join(tmp, "traces.jsonl"),
+    traceStatsHistoryPath: path.join(tmp, "traces-history.jsonl"),
+    openaiBaseUrl: upstream.url,
+  });
+
+  try {
+    await runtime.runtime.store.upsertAccount({
+      ...(await runtime.runtime.store.listAccounts())[0],
+      state: {
+        blockedUntil: undefined,
+        blockedReason: undefined,
+        needsTokenRefresh: true,
+        refreshFailureCount: 3,
+        refreshBlockedUntil: Date.now() + 60_000,
+        lastError: "refresh token failed: token endpoint failed 401",
+        recentErrors: [
+          { at: Date.now(), message: "usage probe failed 401" },
+          { at: Date.now() - 1_000, message: "auth failure: 401" },
+          { at: Date.now() - 2_000, message: "quota/rate-limit: 429" },
+        ],
+      },
+    });
+
+    const res = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5.4",
+        stream: false,
+        input: "reply with ok",
+      }),
+    });
+
+    assert.equal(res.status, 200);
+
+    await runtime.runtime.store.flushIfDirty();
+    const store = JSON.parse(await readFile(storePath, "utf8"));
+    const account = store.accounts.find((entry) => entry.id === "acct-1");
+    assert.equal(account.state.needsTokenRefresh, false);
+    assert.equal(account.state.refreshFailureCount, 0);
+    assert.equal(account.state.refreshBlockedUntil, undefined);
+    assert.equal(account.state.lastError, undefined);
+    assert.equal(account.state.blockedUntil, undefined);
+    assert.equal(account.state.blockedReason, undefined);
+    assert.deepEqual(account.state.recentErrors, [
+      {
+        at: account.state.recentErrors[0].at,
+        message: "quota/rate-limit: 429",
+      },
+    ]);
+  } finally {
+    await runtime.close();
+    await upstream.close();
+  }
+});

@@ -1,6 +1,10 @@
 import { OAuthConfig } from "./oauth.js";
 import { mergeTokenIntoAccount, refreshAccessToken } from "./oauth.js";
-import { normalizeProvider, rememberError } from "./quota.js";
+import {
+  clearAuthFailureState,
+  normalizeProvider,
+  rememberError,
+} from "./quota.js";
 import type { Account } from "./types.js";
 import {
   TOKEN_REFRESH_COOLDOWN_MS,
@@ -35,12 +39,7 @@ export async function ensureValidToken(
         refreshToken,
       );
       const merged = mergeTokenIntoAccount(account, refreshed);
-      merged.state = {
-        ...merged.state,
-        needsTokenRefresh: false,
-        refreshBlockedUntil: undefined,
-        refreshFailureCount: 0,
-      };
+      clearAuthFailureState(merged);
       return merged;
     } catch (err: any) {
       const message = err?.message ?? String(err);

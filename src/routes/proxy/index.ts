@@ -30,6 +30,7 @@ import {
 import {
   chooseAccountForProvider,
   accountSupportsModel,
+  clearAuthFailureState,
   isQuotaErrorText,
   markModelCompatibility,
   markAuthFailure,
@@ -637,6 +638,7 @@ let accounts = store.getCachedAccounts();
         const contentType = upstream.headers.get("content-type") ?? "";
         const isStream = contentType.includes("text/event-stream");
         if (upstream.ok) {
+          clearAuthFailureState(selected);
           markModelCompatibility(
             selected,
             candidate.resolvedModel ?? requestModel,
