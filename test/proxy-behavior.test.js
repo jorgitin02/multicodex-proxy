@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { createTempDir, startHttpServer, startRuntime, writeJson } from "./helpers.js";
 import { resetDiscoveredModelsCacheForTest } from "../dist/routes/proxy/index.js";
@@ -851,6 +852,119 @@ test("proxy returns 504 when an upstream response stalls after headers", async (
 
     assert.equal(res.status, 504);
     assert.deepEqual(await res.json(), { error: "upstream request timed out" });
+  } finally {
+    await runtime.close();
+    await upstream.close();
+  }
+});
+
+test("downstream client disconnects stay in traces without poisoning account errors", async () => {
+  const upstream = await startHttpServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/backend-api/wham/usage") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 0 },
+            secondary_window: { used_percent: 0 },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      req.url?.startsWith("/backend-api/codex/models")
+    ) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ models: [{ slug: "gpt-5.4" }] }));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
+      setTimeout(() => {
+        if (res.writableEnded) return;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(responseObject("too late")));
+      }, 80);
+      return;
+    }
+    res.writeHead(404).end();
+  });
+
+  const tmp = await createTempDir();
+  const storePath = path.join(tmp, "accounts.json");
+  const oauthStatePath = path.join(tmp, "oauth-state.json");
+  const traceFilePath = path.join(tmp, "traces.jsonl");
+  await writeJson(storePath, {
+    accounts: [
+      {
+        id: "acct-1",
+        provider: "openai",
+        accessToken: "acct-1-token",
+        enabled: true,
+        usage: { fetchedAt: Date.now(), primary: { usedPercent: 0 } },
+        state: {},
+      },
+    ],
+    modelAliases: [],
+  });
+  await writeJson(oauthStatePath, { states: [] });
+
+  const runtime = await startRuntime({
+    storePath,
+    oauthStatePath,
+    traceFilePath,
+    traceStatsHistoryPath: path.join(tmp, "traces-history.jsonl"),
+    openaiBaseUrl: upstream.url,
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        `${runtime.baseUrl}/v1/responses`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        },
+        (res) => {
+          res.resume();
+        },
+      );
+      req.on("error", (err) => {
+        if (err.code === "ECONNRESET" || err.message === "socket hang up") {
+          resolve();
+          return;
+        }
+        reject(err);
+      });
+      req.write(
+        JSON.stringify({
+          model: "gpt-5.4",
+          stream: false,
+          input: "reply with ok",
+        }),
+      );
+      req.end();
+      setTimeout(() => req.destroy(), 10);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await runtime.runtime.store.flushIfDirty();
+
+    const store = JSON.parse(await readFile(storePath, "utf8"));
+    const account = store.accounts.find((entry) => entry.id === "acct-1");
+    assert.equal(account.state?.lastError, undefined);
+    assert.equal(account.state?.recentErrors, undefined);
+
+    const traces = (await readFile(traceFilePath, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const trace = traces.at(-1);
+    assert.equal(trace.status, 499);
+    assert.equal(trace.isError, false);
+    assert.equal(trace.error, "downstream client disconnected");
   } finally {
     await runtime.close();
     await upstream.close();

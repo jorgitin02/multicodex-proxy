@@ -761,6 +761,17 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function isDownstreamClientDisconnect(
+  error: unknown,
+  abortSignal?: AbortSignal,
+): boolean {
+  return (
+    Boolean(abortSignal?.aborted) ||
+    (error instanceof Error &&
+      /downstream client disconnected/i.test(error.message))
+  );
+}
+
 function isRetryableUpstreamError(status: number, errorText: string): boolean {
   if (
     status === 429 ||
@@ -1696,9 +1707,15 @@ let accounts = store.getCachedAccounts();
         return;
       } catch (err: any) {
         const msg = err?.message ?? String(err);
-        const status = clientAbort.signal.aborted ? 499 : 599;
-        rememberError(selected, msg);
-        await store.upsertAccount(selected);
+        const downstreamClientDisconnected = isDownstreamClientDisconnect(
+          err,
+          clientAbort.signal,
+        );
+        const status = downstreamClientDisconnected ? 499 : 599;
+        if (!downstreamClientDisconnected) {
+          rememberError(selected, msg);
+          await store.upsertAccount(selected);
+        }
         recordTrace({
           at: Date.now(),
           route: req.path,
@@ -1711,8 +1728,9 @@ let accounts = store.getCachedAccounts();
           latencyMs: Date.now() - startedAt,
           error: msg,
           requestBody,
+          isError: downstreamClientDisconnected ? false : undefined,
         });
-        if (clientAbort.signal.aborted) return;
+        if (downstreamClientDisconnected) return;
         if (isAbortError(err)) {
           if (clientRequestedStream) {
             if (!res.writableEnded) {
