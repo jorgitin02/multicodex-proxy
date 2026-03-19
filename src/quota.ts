@@ -6,7 +6,6 @@ const USAGE_TIMEOUT_MS = Number(process.env.USAGE_TIMEOUT_MS ?? 10_000);
 const BLOCK_FALLBACK_MS = Number(process.env.BLOCK_FALLBACK_MS ?? 30 * 60_000);
 const DEFAULT_ROUTING_WINDOW_MS = Number(process.env.ROUTING_WINDOW_MS ?? 0);
 const AUTH_FALLBACK_MS = Number(process.env.AUTH_FALLBACK_MS ?? 60 * 60_000);
-const MODEL_FALLBACK_MS = Number(process.env.MODEL_FALLBACK_MS ?? 10 * 60_000);
 
 type RouteCache = {
   accountId?: string;
@@ -286,10 +285,5 @@ export function markAuthFailure(account: Account, message: string) {
 export function markModelUnsupported(account: Account, message: string) {
   const modelMatch = message.match(/for ([^:]+):/);
   markModelCompatibility(account, modelMatch?.[1], false, message);
-  account.state = {
-    ...account.state,
-    blockedUntil: Date.now() + MODEL_FALLBACK_MS,
-    blockedReason: message,
-  };
   rememberError(account, message);
 }
