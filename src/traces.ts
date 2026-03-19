@@ -767,14 +767,14 @@ export function createTraceManager(config: TraceManagerConfig) {
   async function appendTrace(
     entry: Omit<
       TraceEntry,
-      "id" | "isError" | "tokensInput" | "tokensOutput" | "tokensTotal"
-    >,
+      "id" | "tokensInput" | "tokensOutput" | "tokensTotal" | "isError"
+    > & { isError?: boolean },
   ) {
     const normalizedTokens = normalizeTokenFields(entry.usage);
     const finalEntry: TraceEntry = {
       ...entry,
       id: randomUUID(),
-      isError: entry.status >= 400,
+      isError: entry.isError ?? entry.status >= 400,
       tokensInput: normalizedTokens.tokensInput,
       tokensOutput: normalizedTokens.tokensOutput,
       tokensTotal: normalizedTokens.tokensTotal,
