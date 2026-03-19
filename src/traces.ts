@@ -8,6 +8,7 @@ export type TraceEntry = {
   id: string;
   at: number;
   route: string;
+  sessionId?: string;
   accountId?: string;
   accountEmail?: string;
   model?: string;
@@ -88,6 +89,7 @@ export type UsageAggregate = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  costUsd: number;
   statusCounts: Record<string, number>;
   firstAt?: number;
   lastAt?: number;
@@ -190,6 +192,10 @@ function normalizeTrace(raw: any): TraceEntry | null {
         : `${at}-${route}-${status}`,
     at,
     route,
+    sessionId:
+      typeof raw.sessionId === "string" && raw.sessionId.trim()
+        ? raw.sessionId.trim()
+        : undefined,
     accountId: typeof raw.accountId === "string" ? raw.accountId : undefined,
     accountEmail:
       typeof raw.accountEmail === "string" ? raw.accountEmail : undefined,
@@ -259,6 +265,7 @@ function createUsageAggregate(): UsageAggregate {
     promptTokens: 0,
     completionTokens: 0,
     totalTokens: 0,
+    costUsd: 0,
     statusCounts: {},
   };
 }
@@ -267,6 +274,14 @@ function addTraceToAggregate(agg: UsageAggregate, trace: TraceEntry) {
   const status = Number(trace.status);
   const statusKey = Number.isFinite(status) ? String(status) : "unknown";
   const tokens = usageToTokens(trace.usage);
+  const costUsd =
+    typeof trace.costUsd === "number"
+      ? trace.costUsd
+      : estimateCostUsd(
+          trace.model,
+          trace.tokensInput ?? 0,
+          trace.tokensOutput ?? 0,
+        ) ?? 0;
 
   agg.requests += 1;
   if (status >= 200 && status < 400) agg.ok += 1;
@@ -282,6 +297,7 @@ function addTraceToAggregate(agg: UsageAggregate, trace: TraceEntry) {
     agg.completionTokens += tokens.completionTokens;
     agg.totalTokens += tokens.totalTokens;
   }
+  agg.costUsd += costUsd;
 
   if (typeof trace.at === "number") {
     agg.firstAt =
@@ -321,6 +337,7 @@ function finalizeAggregate(agg: UsageAggregate) {
       completion: agg.completionTokens,
       total: agg.totalTokens,
     },
+    costUsd: Math.round(agg.costUsd * 1_000_000) / 1_000_000,
     statusCounts: agg.statusCounts,
     firstAt: agg.firstAt,
     lastAt: agg.lastAt,

@@ -15,13 +15,14 @@ import {
   YAxis,
 } from "recharts";
 import { estimateCostUsd } from "../../model-pricing";
-import { CHART_COLORS, fmt, formatTokenCount, maskEmail, maskId, pct, routeLabel, usd } from "../../lib/ui";
+import { CHART_COLORS, fmt, formatSessionTail, formatTokenCount, maskEmail, maskId, pct, routeLabel, usd } from "../../lib/ui";
 import { Metric } from "../Metric";
-import type { Account, Trace, TracePagination, TraceRangePreset, TraceStats } from "../../types";
+import type { Account, Trace, TracePagination, TraceRangePreset, TraceStats, TraceUsageStats } from "../../types";
 
 type Props = {
   accounts: Account[];
   traceStats: TraceStats;
+  traceUsageStats: TraceUsageStats;
   tokensTimeseries: Array<any>;
   modelChartData: Array<any>;
   modelCostChartData: Array<any>;
@@ -43,6 +44,7 @@ export function TracingTab(props: Props) {
   const {
     accounts,
     traceStats,
+    traceUsageStats,
     tokensTimeseries,
     modelChartData,
     modelCostChartData,
@@ -77,6 +79,14 @@ export function TracingTab(props: Props) {
   const formatTooltipValue = (value: any) => formatTokenChartValue(value?.[0] ?? value ?? 0);
 
   const formatPieTokenLabel = ({ value }: { value?: number }) => formatTokenChartValue(value);
+  const usageCoverage =
+    traceUsageStats.totals.requests > 0
+      ? (traceUsageStats.totals.requestsWithUsage / traceUsageStats.totals.requests) * 100
+      : 0;
+  const statusEntries = Object.entries(traceUsageStats.totals.statusCounts).sort((a, b) => b[1] - a[1]);
+  const topAccounts = traceUsageStats.byAccount.slice(0, 6);
+  const topRoutes = traceUsageStats.byRoute.slice(0, 6);
+  const topSessions = traceUsageStats.bySession.slice(0, 8);
 
   return (
     <>
@@ -86,6 +96,14 @@ export function TracingTab(props: Props) {
         <Metric title="Total tokens" value={formatTokenCount(traceStats.totals.tokensTotal)} />
         <Metric title="Total cost" value={usd(traceStats.totals.costUsd)} />
         <Metric title="Avg latency" value={`${Math.round(traceStats.totals.latencyAvgMs)}ms`} />
+      </section>
+
+      <section className="grid cards5">
+        <Metric title="Success rate" value={`${traceUsageStats.totals.successRate.toFixed(1)}%`} />
+        <Metric title="Stream share" value={`${traceUsageStats.totals.streamingRate.toFixed(1)}%`} />
+        <Metric title="Usage captured" value={`${usageCoverage.toFixed(1)}%`} />
+        <Metric title="Active sessions" value={`${traceUsageStats.bySession.length}`} />
+        <Metric title="Active accounts" value={`${traceUsageStats.byAccount.length}`} />
       </section>
 
       <section className="grid cards2">
@@ -212,6 +230,142 @@ export function TracingTab(props: Props) {
         </div>
       </section>
 
+      <section className="grid cards2">
+        <section className="panel">
+          <h2>Usage by account</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Req</th>
+                  <th>Success</th>
+                  <th>Tokens</th>
+                  <th>Cost</th>
+                  <th>Avg latency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topAccounts.map((entry) => {
+                  const accountLabel = sanitized
+                    ? maskEmail(entry.account.email) || maskId(entry.accountId)
+                    : entry.account.email ?? entry.accountId;
+                  return (
+                    <tr key={entry.accountId}>
+                      <td className="mono">{accountLabel}</td>
+                      <td>{entry.requests}</td>
+                      <td>{entry.successRate.toFixed(1)}%</td>
+                      <td>{formatTokenCount(entry.tokens.total)}</td>
+                      <td className="mono">{usd(entry.costUsd)}</td>
+                      <td>{Math.round(entry.avgLatencyMs)}ms</td>
+                    </tr>
+                  );
+                })}
+                {!topAccounts.length && (
+                  <tr>
+                    <td colSpan={6} className="muted">No account usage in this range.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Usage by route</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Route</th>
+                  <th>Req</th>
+                  <th>Errors</th>
+                  <th>Stream</th>
+                  <th>Tokens</th>
+                  <th>Avg latency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topRoutes.map((entry) => (
+                  <tr key={entry.route}>
+                    <td className="mono">{routeLabel(entry.route)}</td>
+                    <td>{entry.requests}</td>
+                    <td>{entry.errors}</td>
+                    <td>{entry.streamingRate.toFixed(1)}%</td>
+                    <td>{formatTokenCount(entry.tokens.total)}</td>
+                    <td>{Math.round(entry.avgLatencyMs)}ms</td>
+                  </tr>
+                ))}
+                {!topRoutes.length && (
+                  <tr>
+                    <td colSpan={6} className="muted">No route usage in this range.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section className="grid cards2">
+        <section className="panel">
+          <h2>Top sessions</h2>
+          <p className="muted">Session IDs are shown by tail only.</p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Session</th>
+                  <th>Req</th>
+                  <th>Tokens</th>
+                  <th>Cost</th>
+                  <th>Avg latency</th>
+                  <th>Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topSessions.map((entry) => (
+                  <tr key={entry.sessionId}>
+                    <td className="mono">{formatSessionTail(entry.sessionId)}</td>
+                    <td>{entry.requests}</td>
+                    <td>{formatTokenCount(entry.tokens.total)}</td>
+                    <td className="mono">{usd(entry.costUsd)}</td>
+                    <td>{Math.round(entry.avgLatencyMs)}ms</td>
+                    <td>{fmt(entry.lastAt)}</td>
+                  </tr>
+                ))}
+                {!topSessions.length && (
+                  <tr>
+                    <td colSpan={6} className="muted">No session-tagged traces in this range.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Status mix</h2>
+          <div className="chips">
+            {statusEntries.map(([status, count]) => {
+              const share =
+                traceUsageStats.totals.requests > 0
+                  ? (count / traceUsageStats.totals.requests) * 100
+                  : 0;
+              return (
+                <span key={status} className="chip mono">
+                  {status}: {count} ({share.toFixed(1)}%)
+                </span>
+              );
+            })}
+            {!statusEntries.length && <span className="chip mono">No traces</span>}
+          </div>
+          <p className="muted">
+            Matched {traceUsageStats.tracesMatched} of {traceUsageStats.tracesEvaluated} retained traces in the selected range.
+          </p>
+        </section>
+      </section>
+
       <section className="panel">
         <div className="trace-head">
           <h2>Request tracing</h2>
@@ -241,6 +395,7 @@ export function TracingTab(props: Props) {
             <thead>
               <tr>
                 <th>Time</th>
+                <th>Session</th>
                 <th>Route</th>
                 <th>Model</th>
                 <th>Account</th>
@@ -259,10 +414,12 @@ export function TracingTab(props: Props) {
                 const accountLabel = sanitized
                   ? maskEmail(t.accountEmail) || maskId(t.accountId)
                   : t.accountEmail ?? t.accountId ?? "-";
+                const sessionLabel = formatSessionTail(t.sessionId);
                 return (
                   <React.Fragment key={t.id}>
                     <tr onClick={() => void toggleExpandedTrace(t.id)} className="trace-row">
                       <td>{fmt(t.at)}</td>
+                      <td className="mono">{sessionLabel || "-"}</td>
                       <td className="mono">{routeLabel(t.route)}</td>
                       <td className="mono">{t.model ?? "-"}</td>
                       <td>
@@ -289,7 +446,7 @@ export function TracingTab(props: Props) {
                     </tr>
                     {isExpanded && (
                       <tr>
-                        <td colSpan={9}>
+                        <td colSpan={10}>
                           <div className="expanded-trace">
                             {expandedTraceLoading && <div className="muted">Loading trace details...</div>}
                             {!expandedTraceLoading && expandedTrace && expandedTrace.id === t.id && (

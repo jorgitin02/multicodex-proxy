@@ -1166,6 +1166,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1197,6 +1198,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1224,6 +1226,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1291,6 +1294,7 @@ let accounts = store.getCachedAccounts();
           recordTrace({
             at: Date.now(),
             route: req.path,
+            sessionId,
             accountId: selected.id,
             accountEmail: selected.email,
             model: tracedModel,
@@ -1336,6 +1340,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1366,6 +1371,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1451,6 +1457,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1485,6 +1492,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1535,6 +1543,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1565,6 +1574,7 @@ let accounts = store.getCachedAccounts();
             recordTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1586,6 +1596,7 @@ let accounts = store.getCachedAccounts();
           recordTrace({
             at: Date.now(),
             route: req.path,
+            sessionId,
             accountId: selected.id,
             accountEmail: selected.email,
             model: tracedModel,
@@ -1619,6 +1630,7 @@ let accounts = store.getCachedAccounts();
         recordTrace({
           at: Date.now(),
           route: req.path,
+          sessionId,
           accountId: selected.id,
           accountEmail: selected.email,
           model: tracedModel,
@@ -1690,6 +1702,7 @@ let accounts = store.getCachedAccounts();
         recordTrace({
           at: Date.now(),
           route: req.path,
+          sessionId,
           accountId: selected.id,
           accountEmail: selected.email,
           model: tracedModel,
