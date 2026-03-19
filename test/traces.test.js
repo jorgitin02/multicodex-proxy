@@ -43,3 +43,28 @@ test("trace manager keeps a bounded in-memory window and compacts persisted trac
     ["gpt-2", "gpt-3", "gpt-4"],
   );
 });
+
+test("trace manager preserves session ids for trace list entries", async () => {
+  const tmp = await createTempDir();
+  const { createTraceManager } = await import("../dist/traces.js");
+  const manager = createTraceManager({
+    filePath: path.join(tmp, "traces.jsonl"),
+    historyFilePath: path.join(tmp, "traces-history.jsonl"),
+  });
+
+  await manager.appendTrace({
+    at: Date.now(),
+    route: "/responses",
+    sessionId: "sess_test_123",
+    status: 200,
+    stream: true,
+    latencyMs: 42,
+    model: "gpt-5.4",
+  });
+
+  const [trace] = await manager.readTraceWindow();
+  assert.equal(trace?.sessionId, "sess_test_123");
+
+  const list = await manager.readTraceListWindow();
+  assert.equal(list[0]?.sessionId, "sess_test_123");
+});

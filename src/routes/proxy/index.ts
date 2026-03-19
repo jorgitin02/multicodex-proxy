@@ -1010,6 +1010,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1041,6 +1042,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1068,6 +1070,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1135,6 +1138,7 @@ let accounts = store.getCachedAccounts();
           await appendTrace({
             at: Date.now(),
             route: req.path,
+            sessionId,
             accountId: selected.id,
             accountEmail: selected.email,
             model: tracedModel,
@@ -1180,6 +1184,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1210,6 +1215,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1295,6 +1301,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1329,6 +1336,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1379,6 +1387,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1409,6 +1418,7 @@ let accounts = store.getCachedAccounts();
             await appendTrace({
               at: Date.now(),
               route: req.path,
+              sessionId,
               accountId: selected.id,
               accountEmail: selected.email,
               model: tracedModel,
@@ -1430,6 +1440,7 @@ let accounts = store.getCachedAccounts();
           await appendTrace({
             at: Date.now(),
             route: req.path,
+            sessionId,
             accountId: selected.id,
             accountEmail: selected.email,
             model: tracedModel,
@@ -1463,6 +1474,7 @@ let accounts = store.getCachedAccounts();
         await appendTrace({
           at: Date.now(),
           route: req.path,
+          sessionId,
           accountId: selected.id,
           accountEmail: selected.email,
           model: tracedModel,
@@ -1518,6 +1530,7 @@ let accounts = store.getCachedAccounts();
         await appendTrace({
           at: Date.now(),
           route: req.path,
+          sessionId,
           accountId: selected.id,
           accountEmail: selected.email,
           model: tracedModel,

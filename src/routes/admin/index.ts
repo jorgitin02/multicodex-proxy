@@ -506,6 +506,7 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     const globalAgg = createUsageAggregate();
     const byAccount = new Map<string, ReturnType<typeof createUsageAggregate>>();
     const byRoute = new Map<string, ReturnType<typeof createUsageAggregate>>();
+    const bySession = new Map<string, ReturnType<typeof createUsageAggregate>>();
 
     for (const trace of filtered) {
       addTraceToAggregate(globalAgg, trace);
@@ -518,6 +519,16 @@ export function createAdminRouter(options: AdminRoutesOptions) {
       const routeKey = trace.route ?? "unknown";
       if (!byRoute.has(routeKey)) byRoute.set(routeKey, createUsageAggregate());
       addTraceToAggregate(byRoute.get(routeKey)!, trace);
+
+      const sessionKey =
+        typeof trace.sessionId === "string" && trace.sessionId.trim()
+          ? trace.sessionId.trim()
+          : "";
+      if (sessionKey) {
+        if (!bySession.has(sessionKey))
+          bySession.set(sessionKey, createUsageAggregate());
+        addTraceToAggregate(bySession.get(sessionKey)!, trace);
+      }
     }
 
     const accounts = await store.listAccounts();
@@ -550,6 +561,10 @@ export function createAdminRouter(options: AdminRoutesOptions) {
       .map(([route, agg]) => ({ route, ...finalizeAggregate(agg) }))
       .sort((a, b) => b.requests - a.requests);
 
+    const bySessionOut = Array.from(bySession.entries())
+      .map(([sessionId, agg]) => ({ sessionId, ...finalizeAggregate(agg) }))
+      .sort((a, b) => b.requests - a.requests);
+
     res.json({
       ok: true,
       filters: {
@@ -561,6 +576,7 @@ export function createAdminRouter(options: AdminRoutesOptions) {
       totals: finalizeAggregate(globalAgg),
       byAccount: byAccountOut,
       byRoute: byRouteOut,
+      bySession: bySessionOut,
       tracesEvaluated: traces.length,
       tracesMatched: filtered.length,
     });
