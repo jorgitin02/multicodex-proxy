@@ -47,6 +47,7 @@ type RuntimeOptions = {
   oauthCallbackBindHost?: string;
   installSignalHandlers?: boolean;
   encryptionKey?: string;
+  upstreamRequestTimeoutMs?: number;
 };
 
 function isLoopbackHost(host: string): boolean {
@@ -76,6 +77,7 @@ export async function createRuntime(options: RuntimeOptions = {}) {
   const oauthCallbackBindHost =
     options.oauthCallbackBindHost ?? OAUTH_CALLBACK_BIND_HOST;
   const encryptionKey = options.encryptionKey ?? STORE_ENCRYPTION_KEY;
+  const upstreamRequestTimeoutMs = options.upstreamRequestTimeoutMs;
 
   if (!isLoopbackHost(host) && !adminToken) {
     throw new Error("ADMIN_TOKEN is required when binding off loopback");
@@ -158,6 +160,7 @@ export async function createRuntime(options: RuntimeOptions = {}) {
     mistralUpstreamPath,
     mistralCompactUpstreamPath,
     oauthConfig,
+    upstreamRequestTimeoutMs,
   });
 
   app.use("/admin", adminGuard, adminRouter);

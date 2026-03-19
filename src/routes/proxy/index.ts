@@ -45,6 +45,7 @@ import {
   parseZaiErrorCode,
   shouldBlockAccountForZaiError,
   getZaiBlockDuration,
+  USAGE_CACHE_TTL_MS,
 } from "../../quota.js";
 import {
   ensureNonEmptyChatCompletion,
@@ -72,6 +73,7 @@ type ProxyRoutesOptions = {
   zaiUpstreamPath: string;
   zaiCompactUpstreamPath: string;
   oauthConfig: OAuthConfig;
+  upstreamRequestTimeoutMs?: number;
 };
 
 const modelsCache: { at: number; models: ExposedModel[] } = {
@@ -91,6 +93,11 @@ const modelsValidationCache: {
 };
 
 const MODELS_VALIDATION_CACHE_MS = 60_000; // Refresh every 60 seconds
+
+export function resetDiscoveredModelsCacheForTest() {
+  modelsCache.at = 0;
+  modelsCache.models = [];
+}
 
 type ExposedModel = {
   id: string;
@@ -476,6 +483,38 @@ function takeNextSSEFrame(buffer: string): SSEFrame {
   };
 }
 
+function frameSignalsResponseCompleted(frame: string): boolean {
+  return (
+    /(?:^|\r?\n)event:\s*response\.completed\b/.test(frame) ||
+    frame.includes('"response.completed"')
+  );
+}
+
+function frameSignalsOutputTextDone(frame: string): boolean {
+  return (
+    /(?:^|\r?\n)event:\s*response\.output_text\.done\b/.test(frame) ||
+    frame.includes('"response.output_text.done"')
+  );
+}
+
+function frameSignalsResponseTerminal(frame: string): boolean {
+  return (
+    frameSignalsResponseCompleted(frame) || frameSignalsOutputTextDone(frame)
+  );
+}
+
+function extractSSEDataPayload(frame: string): any | undefined {
+  try {
+    const dataLine = frame
+      .split(/\r?\n/)
+      .find((line) => line.trim().startsWith("data:"));
+    if (!dataLine) return undefined;
+    return JSON.parse(dataLine.slice(5).trim());
+  } catch {
+    return undefined;
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -483,11 +522,16 @@ function sleep(ms: number): Promise<void> {
 function createRequestSignal(
   timeoutMs: number,
   upstreamAbort?: AbortSignal,
-): AbortSignal {
+): { signal: AbortSignal; clearTimeout: () => void } {
   const controller = new AbortController();
-  const timer = setTimeout(() => {
+  let timer: NodeJS.Timeout | undefined = setTimeout(() => {
     controller.abort(new Error(`request timed out after ${timeoutMs}ms`));
   }, timeoutMs);
+  const clearTimeoutOnly = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = undefined;
+  };
   const onAbort = () => controller.abort(upstreamAbort?.reason);
   if (upstreamAbort) {
     if (upstreamAbort.aborted) {
@@ -499,12 +543,215 @@ function createRequestSignal(
   controller.signal.addEventListener(
     "abort",
     () => {
-      clearTimeout(timer);
+      clearTimeoutOnly();
       if (upstreamAbort) upstreamAbort.removeEventListener("abort", onAbort);
     },
     { once: true },
   );
-  return controller.signal;
+  return {
+    signal: controller.signal,
+    clearTimeout: clearTimeoutOnly,
+  };
+}
+
+async function readChunkWithInactivityTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void reader.cancel().catch(() => {});
+      reject(new Error(`response stream timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void reader.cancel().catch(() => {});
+      const reason = abortSignal?.reason;
+      reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")));
+    };
+
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    reader.read().then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(result);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readResponseTextWithInactivityTimeout(
+  response: Response,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  return readReaderTextWithInactivityTimeout(
+    reader,
+    new TextDecoder(),
+    timeoutMs,
+    abortSignal,
+  );
+}
+
+async function readReaderTextWithInactivityTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+  initialText = "",
+): Promise<string> {
+  let text = initialText;
+
+  while (true) {
+    const { value, done } = await readChunkWithInactivityTimeout(
+      reader,
+      timeoutMs,
+      abortSignal,
+    );
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+
+  text += decoder.decode();
+  return text;
+}
+
+async function peekResponseTextStart(
+  response: Response,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<{
+  reader: ReadableStreamDefaultReader<Uint8Array> | null;
+  decoder: TextDecoder;
+  initialText: string;
+}> {
+  const decoder = new TextDecoder();
+  if (!response.body) {
+    return { reader: null, decoder, initialText: "" };
+  }
+  const reader = response.body.getReader();
+  const { value, done } = await readChunkWithInactivityTimeout(
+    reader,
+    timeoutMs,
+    abortSignal,
+  );
+  if (done) {
+    return {
+      reader,
+      decoder,
+      initialText: decoder.decode(),
+    };
+  }
+
+  return {
+    reader,
+    decoder,
+    initialText: decoder.decode(value, { stream: true }),
+  };
+}
+
+function looksLikeSSEPayload(text: string): boolean {
+  return /(?:^|\r?\n)(event:|data:)\s*/.test(text);
+}
+
+async function readResponsesSSETextUntilTerminalFromReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+  initialText = "",
+): Promise<string> {
+  let text = initialText;
+  let sseBuffer = initialText;
+  let completed = false;
+
+  while (true) {
+    const { value, done } = await readChunkWithInactivityTimeout(
+      reader,
+      timeoutMs,
+      abortSignal,
+    );
+    if (done) break;
+    sseBuffer += decoder.decode(value, { stream: true });
+
+    while (true) {
+      const next = takeNextSSEFrame(sseBuffer);
+      if (!next) break;
+      sseBuffer = next.rest;
+      text += `${next.frame}\n\n`;
+      if (frameSignalsResponseTerminal(next.frame)) {
+        completed = true;
+        break;
+      }
+    }
+
+    if (completed) break;
+  }
+
+  if (!completed) {
+    sseBuffer += decoder.decode();
+    while (true) {
+      const next = takeNextSSEFrame(sseBuffer);
+      if (!next) break;
+      sseBuffer = next.rest;
+      text += `${next.frame}\n\n`;
+      if (frameSignalsResponseTerminal(next.frame)) {
+        completed = true;
+        break;
+      }
+    }
+    if (!completed && sseBuffer.trim()) text += sseBuffer;
+  }
+
+  if (completed) void reader.cancel().catch(() => {});
+  return text;
+}
+
+async function readResponsesSSETextUntilTerminal(
+  response: Response,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  if (!response.body) return "";
+  return readResponsesSSETextUntilTerminalFromReader(
+    response.body.getReader(),
+    new TextDecoder(),
+    timeoutMs,
+    abortSignal,
+  );
 }
 
 function isAbortError(error: unknown): boolean {
@@ -551,10 +798,15 @@ async function fetchCodexWithRetry(
   const maxAttempts = Math.max(0, MAX_GET_RETRIES);
   for (let attempt = 0; attempt <= maxAttempts; attempt++) {
     try {
+      const requestSignal = createRequestSignal(
+        MODEL_DISCOVERY_TIMEOUT_MS,
+        signal,
+      );
       const response = await fetch(url, {
         ...init,
-        signal: createRequestSignal(MODEL_DISCOVERY_TIMEOUT_MS, signal),
+        signal: requestSignal.signal,
       });
+      requestSignal.clearTimeout();
       if (response.ok) return response;
       const errorText = await response
         .clone()
@@ -604,6 +856,7 @@ export function createProxyRouter(options: ProxyRoutesOptions) {
       zaiUpstreamPath,
       zaiCompactUpstreamPath,
       oauthConfig,
+      upstreamRequestTimeoutMs = UPSTREAM_REQUEST_TIMEOUT_MS,
     } = options;
   const { recordTrace } = traceManager;
   const router = express.Router();
@@ -637,6 +890,12 @@ export function createProxyRouter(options: ProxyRoutesOptions) {
 
   // Start background model cache refresh
   startBackgroundModelRefresh(store, openaiBaseUrl, mistralBaseUrl, zaiBaseUrl);
+
+  function refreshUsageInBackground(account: any, usageBaseUrl: string) {
+    void refreshUsageIfNeeded(account, usageBaseUrl)
+      .then((refreshed) => store.upsertAccount(refreshed))
+      .catch(() => undefined);
+  }
 
   async function proxyWithRotation(
     req: express.Request,
@@ -675,7 +934,10 @@ let accounts = store.getCachedAccounts();
         let usageBaseUrl = openaiBaseUrl;
         if (provider === "mistral") usageBaseUrl = mistralBaseUrl;
         else if (provider === "zai") usageBaseUrl = zaiBaseUrl;
-        await refreshUsageIfNeeded(valid, usageBaseUrl);
+        const usageFetchedAt = valid.usage?.fetchedAt ?? 0;
+        if (Date.now() - usageFetchedAt >= USAGE_CACHE_TTL_MS) {
+          refreshUsageInBackground(valid, usageBaseUrl);
+        }
         return valid;
       }),
     );
@@ -697,16 +959,18 @@ let accounts = store.getCachedAccounts();
       });
     }
 
-    const discoveredModels = await discoverModels(store, openaiBaseUrl, mistralBaseUrl, zaiBaseUrl);
     const modelAliases = store.getCachedModelAliases();
     const routingCandidates = buildRoutingCandidates(
       requestModel,
-      discoveredModels,
+      modelsCache.models,
       modelAliases,
     );
     const tried = new Set<string>();
     const maxAttempts = Math.min(accounts.length, MAX_ACCOUNT_RETRY_ATTEMPTS);
     let providerTried = false;
+    let lastModelUnsupported:
+      | { status: number; text: string; contentType: string }
+      | undefined;
 
     for (const candidate of routingCandidates) {
       const providerAccounts = accounts.filter(
@@ -743,9 +1007,6 @@ let accounts = store.getCachedAccounts();
         delete payloadToUpstream.tool_choice;
         delete payloadToUpstream.parallel_tool_calls;
       }
-      if (isResponsesCompactPath && payloadToUpstream && typeof payloadToUpstream === "object") {
-        delete payloadToUpstream.store;
-      }
       if (candidate.resolvedModel) payloadToUpstream.model = candidate.resolvedModel;
       const requestBody = TRACE_INCLUDE_BODY ? req.body : undefined;
       const tracedModel =
@@ -781,18 +1042,41 @@ let accounts = store.getCachedAccounts();
           upstreamBaseUrl = zaiBaseUrl;
           upstreamPath = isResponsesCompactPath ? zaiCompactUpstreamPath : zaiUpstreamPath;
         }
+        const requestSignal = createRequestSignal(
+          upstreamRequestTimeoutMs,
+          clientAbort.signal,
+        );
         const upstream = await fetch(`${upstreamBaseUrl}${upstreamPath}`, {
           method: "POST",
           headers,
           body: JSON.stringify(payloadToUpstream),
-          signal: createRequestSignal(
-            UPSTREAM_REQUEST_TIMEOUT_MS,
-            clientAbort.signal,
-          ),
+          signal: requestSignal.signal,
         });
+        requestSignal.clearTimeout();
 
         const contentType = upstream.headers.get("content-type") ?? "";
-        const isStream = contentType.includes("text/event-stream");
+        let isStream = contentType.includes("text/event-stream");
+        let prefetchedText = "";
+        let prefetchedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+        let prefetchedDecoder: TextDecoder | null = null;
+
+        if (
+          upstream.ok &&
+          clientRequestedStream &&
+          !shouldReturnChatCompletions &&
+          !isStream &&
+          upstream.body
+        ) {
+          const peeked = await peekResponseTextStart(
+            upstream,
+            upstreamRequestTimeoutMs,
+            clientAbort.signal,
+          );
+          prefetchedText = peeked.initialText;
+          prefetchedReader = peeked.reader;
+          prefetchedDecoder = peeked.decoder;
+          if (looksLikeSSEPayload(prefetchedText)) isStream = true;
+        }
         if (upstream.ok) {
           clearAuthFailureState(selected);
           markModelCompatibility(
@@ -820,7 +1104,11 @@ let accounts = store.getCachedAccounts();
             let doneSent = false;
 
             while (true) {
-              const { value, done } = await reader.read();
+              const { value, done } = await readChunkWithInactivityTimeout(
+                reader,
+                upstreamRequestTimeoutMs,
+                clientAbort.signal,
+              );
               if (done) break;
 
               const chunk = decoder.decode(value, { stream: true });
@@ -891,7 +1179,11 @@ let accounts = store.getCachedAccounts();
           }
 
           if (shouldReturnChatCompletions) {
-            const txt = await upstream.text();
+            const txt = await readResponsesSSETextUntilTerminal(
+              upstream,
+              upstreamRequestTimeoutMs,
+              clientAbort.signal,
+            );
             const parsedChat = parseResponsesSSEToChatCompletion(
               txt,
               req.body?.model ?? payloadToUpstream?.model ?? "unknown",
@@ -921,7 +1213,11 @@ let accounts = store.getCachedAccounts();
           }
 
           if (!clientRequestedStream) {
-            const txt = await upstream.text();
+            const txt = await readResponsesSSETextUntilTerminal(
+              upstream,
+              upstreamRequestTimeoutMs,
+              clientAbort.signal,
+            );
             const respObj = parseResponsesSSEToResponseObject(txt);
             res.status(upstream.ok ? 200 : upstream.status).json(respObj);
             const upstreamError = !upstream.ok ? txt.slice(0, 500) : undefined;
@@ -944,68 +1240,52 @@ let accounts = store.getCachedAccounts();
 
           res.status(upstream.status);
           setForwardHeaders(upstream, res);
-          if (!upstream.body) return res.end();
-          const reader = upstream.body.getReader();
-          const decoder = new TextDecoder();
+          res.flushHeaders();
+          const reader = prefetchedReader ?? upstream.body?.getReader() ?? null;
+          const decoder = prefetchedDecoder ?? new TextDecoder();
+          if (!reader) return res.end();
           let sseBuffer = "";
           let accumulatedUsage: any = null;
 
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            sseBuffer += decoder.decode(value, { stream: true });
+          const consumeChunkText = (chunkText: string) => {
+            if (!chunkText) return;
+            res.write(chunkText);
+            sseBuffer += chunkText;
 
             while (true) {
               const next = takeNextSSEFrame(sseBuffer);
               if (!next) break;
               sseBuffer = next.rest;
 
-              if (next.frame.includes("response.completed")) {
-                try {
-                  const dataLine = next.frame
-                    .split(/\r?\n/)
-                    .find((line) => line.trim().startsWith("data:"));
-                  if (dataLine) {
-                    const payload = JSON.parse(dataLine.slice(5).trim());
-                    if (payload?.response?.usage) {
-                      accumulatedUsage = payload.response.usage;
-                    }
-                  }
-                } catch {}
-              }
-
-              const filtered = sanitizeResponsesSSEFrame(next.frame);
-              if (filtered !== null) res.write(`${filtered}\n\n`);
-            }
-          }
-
-          sseBuffer += decoder.decode();
-          while (true) {
-            const next = takeNextSSEFrame(sseBuffer);
-            if (!next) break;
-            sseBuffer = next.rest;
-
-            if (next.frame.includes("response.completed")) {
-              try {
-                const dataLine = next.frame
-                  .split(/\r?\n/)
-                  .find((line) => line.trim().startsWith("data:"));
-                if (dataLine) {
-                  const payload = JSON.parse(dataLine.slice(5).trim());
-                  if (payload?.response?.usage) {
-                    accumulatedUsage = payload.response.usage;
-                  }
+              const payload = extractSSEDataPayload(next.frame);
+              if (payload?.type === "response.completed") {
+                if (payload?.response?.usage) {
+                  accumulatedUsage = payload.response.usage;
                 }
-              } catch {}
+                continue;
+              }
+              if (
+                payload?.type === "response.output_text.done" &&
+                typeof payload?.text === "string"
+              ) {
+                continue;
+              }
             }
+          };
 
-            const filtered = sanitizeResponsesSSEFrame(next.frame);
-            if (filtered !== null) res.write(`${filtered}\n\n`);
+          consumeChunkText(prefetchedText);
+
+          while (true) {
+            const { value, done } = await readChunkWithInactivityTimeout(
+              reader,
+              upstreamRequestTimeoutMs,
+              clientAbort.signal,
+            );
+            if (done) break;
+            consumeChunkText(decoder.decode(value, { stream: true }));
           }
-          if (sseBuffer.trim()) {
-            const filtered = sanitizeResponsesSSEFrame(sseBuffer);
-            if (filtered !== null) res.write(`${filtered}\n\n`);
-          }
+
+          consumeChunkText(decoder.decode());
           res.end();
 
           recordTrace({
@@ -1025,7 +1305,11 @@ let accounts = store.getCachedAccounts();
 
         let bufferedText: string | undefined = undefined;
         if (shouldReturnChatCompletions && clientRequestedStream) {
-          let raw = await upstream.text();
+          let raw = await readResponseTextWithInactivityTimeout(
+            upstream,
+            upstreamRequestTimeoutMs,
+            clientAbort.signal,
+          );
           const upstreamEmptyBody = !raw;
           if (!raw)
             raw = JSON.stringify({
@@ -1073,7 +1357,7 @@ let accounts = store.getCachedAccounts();
               req.body?.model ?? payloadToUpstream?.model ?? "unknown",
             );
             res.status(200);
-            res.set("Content-Type", "text.event-stream");
+            res.set("Content-Type", "text/event-stream");
             res.set("Cache-Control", "no-cache");
             res.set("Connection", "keep-alive");
             res.write(chatCompletionObjectToSSE(converted));
@@ -1098,7 +1382,21 @@ let accounts = store.getCachedAccounts();
           }
         }
 
-        let text = bufferedText ?? (await upstream.text());
+        let text =
+          bufferedText ??
+          (prefetchedReader && prefetchedDecoder
+            ? await readReaderTextWithInactivityTimeout(
+                prefetchedReader,
+                prefetchedDecoder,
+                upstreamRequestTimeoutMs,
+                clientAbort.signal,
+                prefetchedText,
+              )
+            : await readResponseTextWithInactivityTimeout(
+                upstream,
+                upstreamRequestTimeoutMs,
+                clientAbort.signal,
+              ));
         const upstreamEmptyBody = !text;
         if (!text)
           text = JSON.stringify({
@@ -1365,6 +1663,11 @@ let accounts = store.getCachedAccounts();
         if (modelUnsupported) {
           const failedModel =
             candidate.resolvedModel ?? requestModel ?? "unknown-model";
+          lastModelUnsupported = {
+            status: upstream.status,
+            text,
+            contentType,
+          };
           markModelUnsupported(
             selected,
             `model unsupported for ${failedModel}: ${upstream.status}`,
@@ -1397,11 +1700,42 @@ let accounts = store.getCachedAccounts();
           requestBody,
         });
         if (clientAbort.signal.aborted) return;
+        if (isAbortError(err)) {
+          if (clientRequestedStream) {
+            if (!res.writableEnded) {
+              if (shouldReturnChatCompletions) {
+                res.write("data: [DONE]\n\n");
+              }
+              res.end();
+            }
+            return;
+          }
+          if (res.headersSent) {
+            if (!res.writableEnded) {
+              if (shouldReturnChatCompletions && clientRequestedStream) {
+                res.write("data: [DONE]\n\n");
+              }
+              res.end();
+            }
+            return;
+          }
+          return res.status(504).json({ error: "upstream request timed out" });
+        }
+        if (res.headersSent && !res.writableEnded) {
+          res.end();
+          return;
+        }
       }
     }
     }
     if (!providerTried) {
       return res.status(503).json({ error: "no provider accounts configured for requested model" });
+    }
+    if (lastModelUnsupported) {
+      return res
+        .status(lastModelUnsupported.status)
+        .type(lastModelUnsupported.contentType || "application/json")
+        .send(lastModelUnsupported.text);
     }
     res.status(429).json({ error: "all accounts exhausted or unavailable" });
   }
