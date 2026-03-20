@@ -1,6 +1,6 @@
 import type { TracePagination, TraceStats, TraceUsageStats, UsageSummary } from "../types";
 
-export const TRACE_PAGE_SIZE = 100;
+export const TRACE_PAGE_SIZE = 50;
 export const CHART_COLORS = ["#1f7a8c", "#2da4b8", "#4c956c", "#f4a259", "#e76f51", "#8a5a44", "#355070", "#43aa8b"];
 
 export const EMPTY_TRACE_STATS: TraceStats = {
