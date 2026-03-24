@@ -37,8 +37,8 @@ import { AliasesTab } from "./components/tabs/AliasesTab";
 
 const q = new URLSearchParams(window.location.search);
 const initialTab = (q.get("tab") as Tab) || "overview";
-const BASE_REFRESH_MS = 15_000;
-const ACTIVE_TAB_REFRESH_MS = 10_000;
+const BASE_REFRESH_MS = 60_000;
+const ACTIVE_TAB_REFRESH_MS = 30_000;
 
 function getRangeBounds(range: TraceRangePreset): { sinceMs?: number; untilMs?: number } {
   const now = Date.now();
@@ -197,9 +197,12 @@ export default function App() {
     () =>
       filteredTracingTraceStats.timeseries.map((bucket) => ({
         ...bucket,
-        label: new Date(bucket.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        label:
+          tracingRange === "24h"
+            ? new Date(bucket.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : new Date(bucket.at).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
       })),
-    [filteredTracingTraceStats.timeseries],
+    [filteredTracingTraceStats.timeseries, tracingRange],
   );
   const totalTraceCostFromRows = useMemo(
     () =>
@@ -270,11 +273,12 @@ export default function App() {
   const updateDashboardPreferences = (
     updater: (current: DashboardPreferences) => DashboardPreferences,
   ) => {
+    let next: DashboardPreferences | undefined;
     setDashboardPreferences((current) => {
-      const next = normalizeDashboardPreferences(updater(current));
-      enqueuePreferenceSave(next);
+      next = normalizeDashboardPreferences(updater(current));
       return next;
     });
+    if (next) enqueuePreferenceSave(next);
   };
 
   const loadOverviewAnalytics = async (range: TraceRangePreset) => {
@@ -382,7 +386,7 @@ export default function App() {
       void refreshActiveTab().catch((e: any) => setError(e?.message ?? String(e)));
     }, ACTIVE_TAB_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [preferencesLoaded, tab, overviewRange, accountsRange, tracingRange, tracePagination.page]);
+  }, [preferencesLoaded, tab, overviewRange, accountsRange, tracingRange]);
 
   const patch = async (id: string, body: any) => {
     await api(`/admin/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) });

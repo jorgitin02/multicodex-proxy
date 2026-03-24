@@ -165,15 +165,19 @@ export function TracingTab(props: Props) {
   const statusEntries = Object.entries(traceUsageStats.totals.statusCounts).sort((a, b) => b[1] - a[1]);
   const topAccounts = traceUsageStats.byAccount.slice(0, 6);
   const topRoutes = traceUsageStats.byRoute.slice(0, 6);
-  const accountChartData = topAccounts.map((entry) => ({
-    accountId: entry.accountId,
-    label: sanitized
-      ? maskEmail(entry.account.email) || maskId(entry.accountId)
-      : entry.account.email ?? entry.accountId,
-    requests: entry.requests,
-    tokens: entry.tokens.total,
-    costUsd: entry.costUsd,
-  }));
+  const accountChartData = React.useMemo(
+    () =>
+      topAccounts.map((entry) => ({
+        accountId: entry.accountId,
+        label: sanitized
+          ? maskEmail(entry.account.email) || maskId(entry.accountId)
+          : entry.account.email ?? entry.accountId,
+        requests: entry.requests,
+        tokens: entry.tokens.total,
+        costUsd: entry.costUsd,
+      })),
+    [topAccounts, sanitized],
+  );
   const topSessions = React.useMemo(
     () =>
       [...traceUsageStats.bySession]

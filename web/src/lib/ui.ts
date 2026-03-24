@@ -6,7 +6,6 @@ import type {
   TracePagination,
   TraceStats,
   TraceUsageStats,
-  TraceRangePreset,
   TracingCardId,
   UsageSummary,
 } from "../types";
@@ -54,11 +53,6 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
     hiddenSections: [],
   },
 };
-
-const VALID_RANGES = new Set<TraceRangePreset>(["24h", "7d", "30d", "all"]);
-const VALID_TABS = new Set<DashboardTabId>(DEFAULT_TAB_ORDER);
-const VALID_TRACING_CARDS = new Set<TracingCardId>(DEFAULT_TRACING_CARD_ORDER);
-const VALID_ACCOUNTS_SECTIONS = new Set<AccountsSectionId>(DEFAULT_ACCOUNTS_SECTION_ORDER);
 
 export const EMPTY_TRACE_STATS: TraceStats = {
   totals: {
@@ -113,75 +107,30 @@ export const EMPTY_TRACE_USAGE_STATS: TraceUsageStats = {
   tracesMatched: 0,
 };
 
-function normalizeOrderedList<T extends string>(input: unknown, defaults: T[], valid: Set<T>): T[] {
-  const raw = Array.isArray(input) ? input : [];
-  const next: T[] = [];
-
-  for (const entry of raw) {
-    if (typeof entry !== "string" || !valid.has(entry as T)) continue;
-    const value = entry as T;
-    if (!next.includes(value)) next.push(value);
-  }
-
-  for (const value of defaults) {
-    if (!next.includes(value)) next.push(value);
-  }
-
-  return next;
-}
-
-function normalizeSubset<T extends string>(input: unknown, valid: Set<T>): T[] {
-  const raw = Array.isArray(input) ? input : [];
-  const next: T[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string" || !valid.has(entry as T)) continue;
-    const value = entry as T;
-    if (!next.includes(value)) next.push(value);
-  }
-  return next;
-}
-
-function normalizeRange(input: unknown, fallback: TraceRangePreset): TraceRangePreset {
-  return typeof input === "string" && VALID_RANGES.has(input as TraceRangePreset)
-    ? (input as TraceRangePreset)
-    : fallback;
-}
-
+/** Trust server-normalized preferences; fall back to defaults if missing/malformed. */
 export function normalizeDashboardPreferences(input: unknown): DashboardPreferences {
-  const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const ranges = raw.ranges && typeof raw.ranges === "object" ? (raw.ranges as Record<string, unknown>) : {};
-  const tracing = raw.tracing && typeof raw.tracing === "object" ? (raw.tracing as Record<string, unknown>) : {};
-  const accounts = raw.accounts && typeof raw.accounts === "object" ? (raw.accounts as Record<string, unknown>) : {};
-  const topSessionsSort =
-    tracing.topSessionsSort && typeof tracing.topSessionsSort === "object"
-      ? (tracing.topSessionsSort as Record<string, unknown>)
-      : {};
-  const sortKey = ["requests", "tokens", "costUsd", "avgLatencyMs", "lastAt"].includes(String(topSessionsSort.key))
-    ? (topSessionsSort.key as TopSessionsSortState["key"])
-    : DEFAULT_TOP_SESSIONS_SORT.key;
-  const sortDirection = ["asc", "desc"].includes(String(topSessionsSort.direction))
-    ? (topSessionsSort.direction as TopSessionsSortState["direction"])
-    : DEFAULT_TOP_SESSIONS_SORT.direction;
-
+  if (!input || typeof input !== "object") return DEFAULT_DASHBOARD_PREFERENCES;
+  const raw = input as Partial<DashboardPreferences>;
   return {
-    tabOrder: normalizeOrderedList(raw.tabOrder, DEFAULT_TAB_ORDER, VALID_TABS),
+    tabOrder: Array.isArray(raw.tabOrder) && raw.tabOrder.length ? raw.tabOrder : DEFAULT_DASHBOARD_PREFERENCES.tabOrder,
     ranges: {
-      overview: normalizeRange(ranges.overview, DEFAULT_DASHBOARD_PREFERENCES.ranges.overview),
-      accounts: normalizeRange(ranges.accounts, DEFAULT_DASHBOARD_PREFERENCES.ranges.accounts),
-      tracing: normalizeRange(ranges.tracing, DEFAULT_DASHBOARD_PREFERENCES.ranges.tracing),
+      overview: raw.ranges?.overview ?? DEFAULT_DASHBOARD_PREFERENCES.ranges.overview,
+      accounts: raw.ranges?.accounts ?? DEFAULT_DASHBOARD_PREFERENCES.ranges.accounts,
+      tracing: raw.ranges?.tracing ?? DEFAULT_DASHBOARD_PREFERENCES.ranges.tracing,
     },
     tracing: {
-      cardOrder: normalizeOrderedList(tracing.cardOrder, DEFAULT_TRACING_CARD_ORDER, VALID_TRACING_CARDS),
-      hiddenCards: normalizeSubset(tracing.hiddenCards, VALID_TRACING_CARDS),
-      graphsHidden: tracing.graphsHidden === true,
-      topSessionsSort: {
-        key: sortKey,
-        direction: sortDirection,
-      },
+      cardOrder: Array.isArray(raw.tracing?.cardOrder) && raw.tracing!.cardOrder.length
+        ? raw.tracing!.cardOrder
+        : DEFAULT_DASHBOARD_PREFERENCES.tracing.cardOrder,
+      hiddenCards: Array.isArray(raw.tracing?.hiddenCards) ? raw.tracing!.hiddenCards : [],
+      graphsHidden: raw.tracing?.graphsHidden === true,
+      topSessionsSort: raw.tracing?.topSessionsSort ?? DEFAULT_TOP_SESSIONS_SORT,
     },
     accounts: {
-      sectionOrder: normalizeOrderedList(accounts.sectionOrder, DEFAULT_ACCOUNTS_SECTION_ORDER, VALID_ACCOUNTS_SECTIONS),
-      hiddenSections: normalizeSubset(accounts.hiddenSections, VALID_ACCOUNTS_SECTIONS),
+      sectionOrder: Array.isArray(raw.accounts?.sectionOrder) && raw.accounts!.sectionOrder.length
+        ? raw.accounts!.sectionOrder
+        : DEFAULT_DASHBOARD_PREFERENCES.accounts.sectionOrder,
+      hiddenSections: Array.isArray(raw.accounts?.hiddenSections) ? raw.accounts!.hiddenSections : [],
     },
   };
 }
