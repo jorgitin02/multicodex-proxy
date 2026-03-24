@@ -1,7 +1,7 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { AccountStore, OAuthStateStore } from "../../store.js";
-import type { Account, ModelAlias } from "../../types.js";
+import type { Account, DashboardPreferences, ModelAlias } from "../../types.js";
 import {
   clearAuthFailureState,
   normalizeProvider,
@@ -18,6 +18,10 @@ import {
 } from "../../oauth.js";
 import { ensureValidToken } from "../../account-utils.js";
 import type { TraceManager } from "../../traces.js";
+import {
+  DEFAULT_DASHBOARD_PREFERENCES,
+  normalizeDashboardPreferences,
+} from "../../dashboard-preferences.js";
 
 type StoragePaths = {
   accountsPath: string;
@@ -337,6 +341,24 @@ export function createAdminRouter(options: AdminRoutesOptions) {
   router.get("/model-aliases", async (_req, res) =>
     res.json({ modelAliases: await store.listModelAliases() }),
   );
+
+  router.get("/dashboard-preferences", async (_req, res) => {
+    const preferences = await store.getDashboardPreferences();
+    res.json({ ok: true, preferences });
+  });
+
+  router.patch("/dashboard-preferences", async (req, res) => {
+    const body = (req.body ?? {}) as Partial<DashboardPreferences>;
+    const preferences = await store.patchDashboardPreferences(body);
+    res.json({ ok: true, preferences });
+  });
+
+  router.post("/dashboard-preferences/reset", async (_req, res) => {
+    const preferences = await store.replaceDashboardPreferences(
+      normalizeDashboardPreferences(DEFAULT_DASHBOARD_PREFERENCES),
+    );
+    res.json({ ok: true, preferences });
+  });
 
   router.post("/model-aliases", async (req, res) => {
     const body = req.body ?? {};
@@ -660,7 +682,9 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     account = await ensureValidToken(account, oauthConfig);
     const usageBaseUrl =
       normalizeProvider(account) === "mistral" ? mistralBaseUrl : openaiBaseUrl;
-    await refreshUsageIfNeeded(account, usageBaseUrl, true);
+    await refreshUsageIfNeeded(account, usageBaseUrl, true, {
+      requireAccountScope: true,
+    });
     await store.upsertAccount(account);
     res.json({ ok: true, account: redact(account) });
   });
@@ -673,7 +697,9 @@ export function createAdminRouter(options: AdminRoutesOptions) {
           normalizeProvider(valid) === "mistral"
             ? mistralBaseUrl
             : openaiBaseUrl;
-        await refreshUsageIfNeeded(valid, usageBaseUrl, true);
+        await refreshUsageIfNeeded(valid, usageBaseUrl, true, {
+          requireAccountScope: true,
+        });
         return valid;
       }),
     );
@@ -743,7 +769,9 @@ export function createAdminRouter(options: AdminRoutesOptions) {
         account = accountFromOAuth(flow, tokenData);
       }
       clearAuthFailureState(account);
-      account = await refreshUsageIfNeeded(account, openaiBaseUrl, true);
+      account = await refreshUsageIfNeeded(account, openaiBaseUrl, true, {
+        requireAccountScope: true,
+      });
       await store.upsertAccount(account);
       await oauthStore.update(flow.id, {
         status: "success",

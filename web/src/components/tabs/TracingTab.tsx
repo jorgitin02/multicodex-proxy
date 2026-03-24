@@ -15,9 +15,30 @@ import {
   YAxis,
 } from "recharts";
 import { estimateCostUsd } from "../../model-pricing";
-import { CHART_COLORS, fmt, formatSessionTail, formatTokenCount, maskEmail, maskId, pct, routeLabel, usd } from "../../lib/ui";
+import {
+  CHART_COLORS,
+  DEFAULT_TOP_SESSIONS_SORT,
+  DEFAULT_TRACING_CARD_ORDER,
+  fmt,
+  formatSessionTail,
+  formatTokenCount,
+  maskEmail,
+  maskId,
+  pct,
+  routeLabel,
+  usd,
+} from "../../lib/ui";
 import { Metric } from "../Metric";
-import type { Account, Trace, TracePagination, TraceRangePreset, TraceStats, TraceUsageStats } from "../../types";
+import type {
+  Account,
+  DashboardPreferences,
+  Trace,
+  TracePagination,
+  TraceRangePreset,
+  TraceStats,
+  TraceUsageStats,
+  TracingCardId,
+} from "../../types";
 
 type Props = {
   accounts: Account[];
@@ -30,6 +51,12 @@ type Props = {
   gotoTracePage: (page: number) => Promise<void>;
   traceRange: TraceRangePreset;
   setTraceRange: (range: TraceRangePreset) => void;
+  tracingPreferences: DashboardPreferences["tracing"];
+  moveTracingCard: (cardId: TracingCardId, direction: -1 | 1) => void;
+  toggleTracingCardHidden: (cardId: TracingCardId) => void;
+  setTracingGraphsHidden: (hidden: boolean) => void;
+  setTopSessionsSort: (sort: DashboardPreferences["tracing"]["topSessionsSort"]) => void;
+  resetTracingLayout: () => void;
   traces: Trace[];
   expandedTraceId: string | null;
   expandedTrace: Trace | null;
@@ -41,28 +68,16 @@ type Props = {
 };
 
 type SessionUsageEntry = TraceUsageStats["bySession"][number];
-type SessionSortKey = "requests" | "tokens" | "costUsd" | "avgLatencyMs" | "lastAt";
-type SessionSortDirection = "asc" | "desc";
-type SessionSortState = {
-  key: SessionSortKey;
-  direction: SessionSortDirection;
+type SessionSortKey = DashboardPreferences["tracing"]["topSessionsSort"]["key"];
+type SessionSortDirection = DashboardPreferences["tracing"]["topSessionsSort"]["direction"];
+type TraceCardConfig = {
+  title: string;
+  fullSpan?: boolean;
+  render: () => React.ReactNode;
+  toolbar?: React.ReactNode;
 };
-type TraceCardId =
-  | "tokensOverTime"
-  | "modelUsage"
-  | "modelCost"
-  | "errorTrend"
-  | "costOverTime"
-  | "latency"
-  | "tokenSplit"
-  | "usageByAccount"
-  | "usageByRoute"
-  | "topSessions";
 
-const CARD_ORDER_STORAGE_KEY = "tracing-card-order.v1";
-const TOP_SESSIONS_SORT_STORAGE_KEY = "tracing-top-sessions-sort.v1";
-const DEFAULT_TOP_SESSIONS_SORT: SessionSortState = { key: "requests", direction: "desc" };
-const DEFAULT_CARD_ORDER: TraceCardId[] = [
+const GRAPH_CARD_IDS = new Set<TracingCardId>([
   "tokensOverTime",
   "modelUsage",
   "modelCost",
@@ -70,69 +85,20 @@ const DEFAULT_CARD_ORDER: TraceCardId[] = [
   "costOverTime",
   "latency",
   "tokenSplit",
-  "usageByAccount",
-  "usageByRoute",
-  "topSessions",
-];
-const VALID_CARD_IDS = new Set<TraceCardId>(DEFAULT_CARD_ORDER);
-const VALID_SORT_KEYS = new Set<SessionSortKey>(["requests", "tokens", "costUsd", "avgLatencyMs", "lastAt"]);
-const VALID_SORT_DIRECTIONS = new Set<SessionSortDirection>(["asc", "desc"]);
-
-function normalizeCardOrder(input: unknown): TraceCardId[] {
-  const raw = Array.isArray(input) ? input : [];
-  const ordered: TraceCardId[] = [];
-
-  for (const entry of raw) {
-    if (typeof entry !== "string" || !VALID_CARD_IDS.has(entry as TraceCardId)) continue;
-    const cardId = entry as TraceCardId;
-    if (!ordered.includes(cardId)) ordered.push(cardId);
-  }
-
-  for (const cardId of DEFAULT_CARD_ORDER) {
-    if (!ordered.includes(cardId)) ordered.push(cardId);
-  }
-
-  return ordered;
-}
-
-function readCardOrder(): TraceCardId[] {
-  if (typeof window === "undefined") return DEFAULT_CARD_ORDER;
-  try {
-    const raw = window.localStorage.getItem(CARD_ORDER_STORAGE_KEY);
-    return normalizeCardOrder(raw ? JSON.parse(raw) : null);
-  } catch {
-    return DEFAULT_CARD_ORDER;
-  }
-}
-
-function readTopSessionsSort(): SessionSortState {
-  if (typeof window === "undefined") return DEFAULT_TOP_SESSIONS_SORT;
-  try {
-    const raw = window.localStorage.getItem(TOP_SESSIONS_SORT_STORAGE_KEY);
-    const parsed = raw ? (JSON.parse(raw) as Partial<SessionSortState>) : null;
-    if (
-      parsed &&
-      typeof parsed.key === "string" &&
-      VALID_SORT_KEYS.has(parsed.key as SessionSortKey) &&
-      typeof parsed.direction === "string" &&
-      VALID_SORT_DIRECTIONS.has(parsed.direction as SessionSortDirection)
-    ) {
-      return {
-        key: parsed.key as SessionSortKey,
-        direction: parsed.direction as SessionSortDirection,
-      };
-    }
-  } catch {
-    // Fall through to default sort.
-  }
-  return DEFAULT_TOP_SESSIONS_SORT;
-}
+  "accountRequestShare",
+  "accountTokenShare",
+  "accountCostShare",
+]);
 
 function compareNumbers(a: number, b: number, direction: SessionSortDirection) {
   return direction === "asc" ? a - b : b - a;
 }
 
-function compareSessionEntries(a: SessionUsageEntry, b: SessionUsageEntry, sort: SessionSortState) {
+function compareSessionEntries(
+  a: SessionUsageEntry,
+  b: SessionUsageEntry,
+  sort: DashboardPreferences["tracing"]["topSessionsSort"],
+) {
   switch (sort.key) {
     case "requests":
       return compareNumbers(a.requests, b.requests, sort.direction);
@@ -161,6 +127,12 @@ export function TracingTab(props: Props) {
     gotoTracePage,
     traceRange,
     setTraceRange,
+    tracingPreferences,
+    moveTracingCard,
+    toggleTracingCardHidden,
+    setTracingGraphsHidden,
+    setTopSessionsSort,
+    resetTracingLayout,
     traces,
     expandedTraceId,
     expandedTrace,
@@ -170,17 +142,7 @@ export function TracingTab(props: Props) {
     exportTracesZip,
     exportInProgress,
   } = props;
-  const [cardOrder, setCardOrder] = React.useState<TraceCardId[]>(() => readCardOrder());
   const [layoutEditMode, setLayoutEditMode] = React.useState(false);
-  const [topSessionsSort, setTopSessionsSort] = React.useState<SessionSortState>(() => readTopSessionsSort());
-
-  React.useEffect(() => {
-    window.localStorage.setItem(CARD_ORDER_STORAGE_KEY, JSON.stringify(normalizeCardOrder(cardOrder)));
-  }, [cardOrder]);
-
-  React.useEffect(() => {
-    window.localStorage.setItem(TOP_SESSIONS_SORT_STORAGE_KEY, JSON.stringify(topSessionsSort));
-  }, [topSessionsSort]);
 
   const accountProviderById = React.useMemo(
     () => new Map(accounts.map((account) => [account.id, account.provider])),
@@ -188,18 +150,14 @@ export function TracingTab(props: Props) {
   );
 
   const providerFavicon = (provider?: string) =>
-    provider === "mistral"
-      ? "https://mistral.ai/favicon.ico"
-      : "https://openai.com/favicon.ico";
+    provider === "mistral" ? "https://mistral.ai/favicon.ico" : "https://openai.com/favicon.ico";
 
-  const providerLabel = (provider?: string) =>
-    provider === "mistral" ? "Mistral" : "OpenAI";
+  const providerLabel = (provider?: string) => (provider === "mistral" ? "Mistral" : "OpenAI");
 
   const formatTokenChartValue = (value: number | string | undefined) => formatTokenCount(Number(value ?? 0));
-
   const formatTooltipValue = (value: any) => formatTokenChartValue(value?.[0] ?? value ?? 0);
-
   const formatPieTokenLabel = ({ value }: { value?: number }) => formatTokenChartValue(value);
+
   const usageCoverage =
     traceUsageStats.totals.requests > 0
       ? (traceUsageStats.totals.requestsWithUsage / traceUsageStats.totals.requests) * 100
@@ -207,52 +165,65 @@ export function TracingTab(props: Props) {
   const statusEntries = Object.entries(traceUsageStats.totals.statusCounts).sort((a, b) => b[1] - a[1]);
   const topAccounts = traceUsageStats.byAccount.slice(0, 6);
   const topRoutes = traceUsageStats.byRoute.slice(0, 6);
-  const orderedCardIds = React.useMemo(() => normalizeCardOrder(cardOrder), [cardOrder]);
+  const accountChartData = topAccounts.map((entry) => ({
+    accountId: entry.accountId,
+    label: sanitized
+      ? maskEmail(entry.account.email) || maskId(entry.accountId)
+      : entry.account.email ?? entry.accountId,
+    requests: entry.requests,
+    tokens: entry.tokens.total,
+    costUsd: entry.costUsd,
+  }));
   const topSessions = React.useMemo(
     () =>
       [...traceUsageStats.bySession]
         .sort((a, b) => {
-          const primary = compareSessionEntries(a, b, topSessionsSort);
+          const primary = compareSessionEntries(a, b, tracingPreferences.topSessionsSort);
           if (primary !== 0) return primary;
           const lastSeen = compareNumbers(Number(a.lastAt ?? 0), Number(b.lastAt ?? 0), "desc");
           if (lastSeen !== 0) return lastSeen;
           return a.sessionId.localeCompare(b.sessionId);
         })
         .slice(0, 8),
-    [topSessionsSort, traceUsageStats.bySession],
+    [traceUsageStats.bySession, tracingPreferences.topSessionsSort],
   );
-  const layoutChanged = orderedCardIds.some((cardId, index) => cardId !== DEFAULT_CARD_ORDER[index]);
 
-  const moveCard = (cardId: TraceCardId, direction: -1 | 1) => {
-    setCardOrder((current) => {
-      const next = [...normalizeCardOrder(current)];
-      const currentIndex = next.indexOf(cardId);
-      if (currentIndex < 0) return next;
-      const targetIndex = currentIndex + direction;
-      if (targetIndex < 0 || targetIndex >= next.length) return next;
-      [next[currentIndex], next[targetIndex]] = [next[targetIndex], next[currentIndex]];
-      return next;
-    });
-  };
+  const visibleCardIds = React.useMemo(
+    () =>
+      tracingPreferences.cardOrder.filter((cardId) => {
+        if (tracingPreferences.hiddenCards.includes(cardId)) return false;
+        if (tracingPreferences.graphsHidden && GRAPH_CARD_IDS.has(cardId)) return false;
+        return true;
+      }),
+    [tracingPreferences.cardOrder, tracingPreferences.graphsHidden, tracingPreferences.hiddenCards],
+  );
+  const hiddenCardIds = React.useMemo(
+    () => tracingPreferences.cardOrder.filter((cardId) => tracingPreferences.hiddenCards.includes(cardId)),
+    [tracingPreferences.cardOrder, tracingPreferences.hiddenCards],
+  );
 
-  const renderCardControls = (cardId: TraceCardId, index: number, extra?: React.ReactNode) => (
+  const layoutChanged =
+    tracingPreferences.cardOrder.some((cardId, index) => cardId !== DEFAULT_TRACING_CARD_ORDER[index]) ||
+    tracingPreferences.hiddenCards.length > 0 ||
+    tracingPreferences.graphsHidden ||
+    tracingPreferences.topSessionsSort.key !== DEFAULT_TOP_SESSIONS_SORT.key ||
+    tracingPreferences.topSessionsSort.direction !== DEFAULT_TOP_SESSIONS_SORT.direction;
+
+  const renderCardControls = (cardId: TracingCardId, index: number, extra?: React.ReactNode) => (
     <div className="inline wrap tracing-card-toolbar">
       {extra}
+      <button className="btn ghost small" onClick={() => toggleTracingCardHidden(cardId)}>
+        Hide
+      </button>
       {layoutEditMode && (
         <>
-          <button
-            className="btn ghost small"
-            onClick={() => moveCard(cardId, -1)}
-            disabled={index === 0}
-            title="Move card earlier"
-          >
+          <button className="btn ghost small" onClick={() => moveTracingCard(cardId, -1)} disabled={index === 0}>
             Earlier
           </button>
           <button
             className="btn ghost small"
-            onClick={() => moveCard(cardId, 1)}
-            disabled={index === orderedCardIds.length - 1}
-            title="Move card later"
+            onClick={() => moveTracingCard(cardId, 1)}
+            disabled={index === visibleCardIds.length - 1}
           >
             Later
           </button>
@@ -261,7 +232,7 @@ export function TracingTab(props: Props) {
     </div>
   );
 
-  const cards: Record<TraceCardId, { title: string; fullSpan?: boolean; render: () => React.ReactNode; toolbar?: React.ReactNode }> = {
+  const cards: Record<TracingCardId, TraceCardConfig> = {
     tokensOverTime: {
       title: "Tokens over time (hourly)",
       render: () => (
@@ -307,7 +278,7 @@ export function TracingTab(props: Props) {
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
               <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
               <YAxis />
-              <Tooltip formatter={(v: any) => usd(Number(v) || 0)} />
+              <Tooltip formatter={(value: any) => usd(Number(value) || 0)} />
               <Legend />
               <Bar dataKey="costUsd" name="cost usd" fill="#4c956c" />
             </BarChart>
@@ -342,7 +313,7 @@ export function TracingTab(props: Props) {
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
               <XAxis dataKey="label" minTickGap={24} />
               <YAxis />
-              <Tooltip formatter={(v: any) => usd(Number(v) || 0)} />
+              <Tooltip formatter={(value: any) => usd(Number(value) || 0)} />
               <Legend />
               <Line type="monotone" dataKey="costUsd" name="cost usd" stroke="#4c956c" strokeWidth={2} dot={false} />
             </LineChart>
@@ -375,13 +346,7 @@ export function TracingTab(props: Props) {
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
-              <Pie
-                data={modelChartData}
-                dataKey="tokensTotal"
-                nameKey="label"
-                outerRadius={90}
-                label={formatPieTokenLabel}
-              >
+              <Pie data={modelChartData} dataKey="tokensTotal" nameKey="label" outerRadius={90} label={formatPieTokenLabel}>
                 {modelChartData.map((entry, idx) => (
                   <Cell key={`${entry.label}-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
                 ))}
@@ -389,6 +354,54 @@ export function TracingTab(props: Props) {
               <Tooltip formatter={(value: any) => formatTokenChartValue(value)} />
               <Legend />
             </PieChart>
+          </ResponsiveContainer>
+        </div>
+      ),
+    },
+    accountRequestShare: {
+      title: "Requests by account",
+      render: () => (
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={accountChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
+              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="requests" name="requests" fill={CHART_COLORS[0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ),
+    },
+    accountTokenShare: {
+      title: "Tokens by account",
+      render: () => (
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={accountChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
+              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <YAxis tickFormatter={(value: number) => formatTokenCount(Number(value))} />
+              <Tooltip formatter={(value: number) => formatTokenCount(Number(value))} />
+              <Bar dataKey="tokens" name="tokens" fill={CHART_COLORS[1]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ),
+    },
+    accountCostShare: {
+      title: "Cost by account",
+      render: () => (
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={accountChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
+              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <YAxis />
+              <Tooltip formatter={(value: number) => usd(Number(value) || 0)} />
+              <Bar dataKey="costUsd" name="cost usd" fill={CHART_COLORS[2]} />
+            </BarChart>
           </ResponsiveContainer>
         </div>
       ),
@@ -475,12 +488,12 @@ export function TracingTab(props: Props) {
       toolbar: (
         <>
           <select
-            value={topSessionsSort.key}
+            value={tracingPreferences.topSessionsSort.key}
             onChange={(e) =>
-              setTopSessionsSort((current) => ({
-                ...current,
+              setTopSessionsSort({
+                ...tracingPreferences.topSessionsSort,
                 key: e.target.value as SessionSortKey,
-              }))
+              })
             }
           >
             <option value="requests">Sort: requests</option>
@@ -492,13 +505,13 @@ export function TracingTab(props: Props) {
           <button
             className="btn ghost small"
             onClick={() =>
-              setTopSessionsSort((current) => ({
-                ...current,
-                direction: current.direction === "desc" ? "asc" : "desc",
-              }))
+              setTopSessionsSort({
+                ...tracingPreferences.topSessionsSort,
+                direction: tracingPreferences.topSessionsSort.direction === "desc" ? "asc" : "desc",
+              })
             }
           >
-            {topSessionsSort.direction === "desc" ? "Desc" : "Asc"}
+            {tracingPreferences.topSessionsSort.direction === "desc" ? "Desc" : "Asc"}
           </button>
         </>
       ),
@@ -560,19 +573,49 @@ export function TracingTab(props: Props) {
       </section>
 
       <section className="tracing-layout-actions">
-        <p className="muted">Analytics card order is saved in this browser.</p>
-        <div className="inline wrap">
-          <button className="btn ghost" onClick={() => setLayoutEditMode((current) => !current)}>
-            {layoutEditMode ? "Done editing" : "Edit layout"}
-          </button>
-          <button className="btn secondary" onClick={() => setCardOrder(DEFAULT_CARD_ORDER)} disabled={!layoutChanged}>
-            Reset layout
-          </button>
+        <div>
+          <p className="muted">Tracing range and layout are saved globally.</p>
+          <div className="inline wrap">
+            <select value={traceRange} onChange={(e) => setTraceRange(e.target.value as TraceRangePreset)}>
+              <option value="24h">Last 24h</option>
+              <option value="7d">Last 7d</option>
+              <option value="30d">Last 30d</option>
+              <option value="all">All time</option>
+            </select>
+            <button className="btn ghost" onClick={() => setLayoutEditMode((current) => !current)}>
+              {layoutEditMode ? "Done editing" : "Edit layout"}
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => setTracingGraphsHidden(!tracingPreferences.graphsHidden)}
+            >
+              {tracingPreferences.graphsHidden ? "Show graphs" : "Hide graphs"}
+            </button>
+            <button className="btn secondary" onClick={resetTracingLayout} disabled={!layoutChanged}>
+              Reset layout
+            </button>
+          </div>
         </div>
       </section>
 
+      {!!hiddenCardIds.length && (
+        <section className="panel">
+          <div className="inline wrap">
+            <span className="muted">Hidden cards:</span>
+            {hiddenCardIds.map((cardId) => (
+              <button key={cardId} className="btn ghost small" onClick={() => toggleTracingCardHidden(cardId)}>
+                Show {cards[cardId].title}
+              </button>
+            ))}
+            {tracingPreferences.graphsHidden && (
+              <span className="muted">Graph cards are currently hidden by the global graph toggle.</span>
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="grid tracing-layout">
-        {orderedCardIds.map((cardId, index) => {
+        {visibleCardIds.map((cardId, index) => {
           const card = cards[cardId];
           return (
             <section key={cardId} className={`panel tracing-card${card.fullSpan ? " full-span" : ""}`}>
@@ -590,18 +633,6 @@ export function TracingTab(props: Props) {
         <div className="trace-head">
           <h2>Request tracing</h2>
           <div className="inline wrap">
-            <select
-              value={traceRange}
-              onChange={(e) => {
-                setTraceRange(e.target.value as TraceRangePreset);
-                void gotoTracePage(1);
-              }}
-            >
-              <option value="24h">Last 24h</option>
-              <option value="7d">Last 7d</option>
-              <option value="30d">Last 30d</option>
-              <option value="all">All time</option>
-            </select>
             <button className="btn ghost" onClick={() => void gotoTracePage(tracePagination.page - 1)} disabled={!tracePagination.hasPrev}>Previous</button>
             <span className="mono">
               Page {tracePagination.page} / {tracePagination.totalPages} ({tracePagination.total} traces, {tracePagination.pageSize} per page)
@@ -648,21 +679,24 @@ export function TracingTab(props: Props) {
               </tr>
             </thead>
             <tbody>
-              {traces.map((t) => {
-                const isExpanded = expandedTraceId === t.id;
-                const rowCost = typeof t.costUsd === "number" ? t.costUsd : (estimateCostUsd(t.model, t.tokensInput ?? 0, t.tokensOutput ?? 0) ?? 0);
-                const provider = t.accountId ? accountProviderById.get(t.accountId) : undefined;
+              {traces.map((trace) => {
+                const isExpanded = expandedTraceId === trace.id;
+                const rowCost =
+                  typeof trace.costUsd === "number"
+                    ? trace.costUsd
+                    : (estimateCostUsd(trace.model, trace.tokensInput ?? 0, trace.tokensOutput ?? 0) ?? 0);
+                const provider = trace.accountId ? accountProviderById.get(trace.accountId) : undefined;
                 const accountLabel = sanitized
-                  ? maskEmail(t.accountEmail) || maskId(t.accountId)
-                  : t.accountEmail ?? t.accountId ?? "-";
-                const sessionLabel = formatSessionTail(t.sessionId);
+                  ? maskEmail(trace.accountEmail) || maskId(trace.accountId)
+                  : trace.accountEmail ?? trace.accountId ?? "-";
+                const sessionLabel = formatSessionTail(trace.sessionId);
                 return (
-                  <React.Fragment key={t.id}>
-                    <tr onClick={() => void toggleExpandedTrace(t.id)} className="trace-row">
-                      <td>{fmt(t.at)}</td>
+                  <React.Fragment key={trace.id}>
+                    <tr onClick={() => void toggleExpandedTrace(trace.id)} className="trace-row">
+                      <td>{fmt(trace.at)}</td>
                       <td className="mono">{sessionLabel || "-"}</td>
-                      <td className="mono">{routeLabel(t.route)}</td>
-                      <td className="mono">{t.model ?? "-"}</td>
+                      <td className="mono">{routeLabel(trace.route)}</td>
+                      <td className="mono">{trace.model ?? "-"}</td>
                       <td>
                         <span className="inline wrap">
                           {provider && (
@@ -679,18 +713,18 @@ export function TracingTab(props: Props) {
                           <span className="mono">{accountLabel}</span>
                         </span>
                       </td>
-                      <td>{t.status}</td>
-                      <td>{t.latencyMs}ms</td>
-                      <td>{typeof (t.tokensTotal ?? t.usage?.total_tokens) === "number" ? formatTokenCount(t.tokensTotal ?? t.usage?.total_tokens) : "-"}</td>
+                      <td>{trace.status}</td>
+                      <td>{trace.latencyMs}ms</td>
+                      <td>{typeof (trace.tokensTotal ?? trace.usage?.total_tokens) === "number" ? formatTokenCount(trace.tokensTotal ?? trace.usage?.total_tokens) : "-"}</td>
                       <td className="mono">{usd(rowCost)}</td>
-                      <td className="mono">{t.error?.slice(0, 60) ?? "-"}</td>
+                      <td className="mono">{trace.error?.slice(0, 60) ?? "-"}</td>
                     </tr>
                     {isExpanded && (
                       <tr>
                         <td colSpan={10}>
                           <div className="expanded-trace">
                             {expandedTraceLoading && <div className="muted">Loading trace details...</div>}
-                            {!expandedTraceLoading && expandedTrace && expandedTrace.id === t.id && (
+                            {!expandedTraceLoading && expandedTrace && expandedTrace.id === trace.id && (
                               <>
                                 {expandedTrace.hasRequestBody && (
                                   <details open>

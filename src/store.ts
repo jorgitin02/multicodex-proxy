@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
   Account,
+  DashboardPreferences,
   ModelAlias,
   OAuthFlowState,
   OAuthStateFile,
@@ -10,8 +11,17 @@ import type {
 } from "./types.js";
 import { ACCOUNT_FLUSH_INTERVAL_MS } from "./config.js";
 import { decryptJson, encryptJson, looksEncryptedJson } from "./crypto.js";
+import {
+  DEFAULT_DASHBOARD_PREFERENCES,
+  mergeDashboardPreferences,
+  normalizeDashboardPreferences,
+} from "./dashboard-preferences.js";
 
-const DEFAULT_FILE: StoreFile = { accounts: [], modelAliases: [] };
+const DEFAULT_FILE: StoreFile = {
+  accounts: [],
+  modelAliases: [],
+  dashboardPreferences: DEFAULT_DASHBOARD_PREFERENCES,
+};
 const DEFAULT_OAUTH_FILE: OAuthStateFile = { states: [] };
 
 async function ensureFile(
@@ -57,6 +67,7 @@ async function readJsonFile<T>(
 export class AccountStore {
   private inMemoryAccounts: Account[] = [];
   private inMemoryModelAliases: ModelAlias[] = [];
+  private inMemoryDashboardPreferences: DashboardPreferences = DEFAULT_DASHBOARD_PREFERENCES;
   private dirty = false;
   private flushTimer: NodeJS.Timeout | null = null;
   private lastLoadedMtimeMs = 0;
@@ -77,6 +88,9 @@ export class AccountStore {
     this.inMemoryModelAliases = Array.isArray(data.modelAliases)
       ? data.modelAliases
       : [];
+    this.inMemoryDashboardPreferences = normalizeDashboardPreferences(
+      data.dashboardPreferences,
+    );
     this.dirty = false;
     const stat = await fs.stat(this.filePath);
     this.lastLoadedMtimeMs = stat.mtimeMs;
@@ -107,6 +121,7 @@ export class AccountStore {
     await writeJsonAtomic(this.filePath, {
       accounts: this.inMemoryAccounts,
       modelAliases: this.inMemoryModelAliases,
+      dashboardPreferences: this.inMemoryDashboardPreferences,
     }, this.encryptionKey);
     this.dirty = false;
     try {
@@ -125,6 +140,10 @@ export class AccountStore {
 
   getCachedModelAliases(): ModelAlias[] {
     return this.inMemoryModelAliases.map((a) => ({ ...a, targets: [...a.targets] }));
+  }
+
+  getCachedDashboardPreferences(): DashboardPreferences {
+    return normalizeDashboardPreferences(this.inMemoryDashboardPreferences);
   }
 
   markAccountModified(accountId: string, account: Account) {
@@ -175,6 +194,33 @@ export class AccountStore {
   async listAccounts(): Promise<Account[]> {
     await this.reloadFromDiskIfChanged();
     return this.getCachedAccounts();
+  }
+
+  async getDashboardPreferences(): Promise<DashboardPreferences> {
+    await this.reloadFromDiskIfChanged();
+    return this.getCachedDashboardPreferences();
+  }
+
+  async patchDashboardPreferences(
+    patch: Partial<DashboardPreferences>,
+  ): Promise<DashboardPreferences> {
+    const updated = mergeDashboardPreferences(
+      this.inMemoryDashboardPreferences,
+      patch,
+    );
+    this.inMemoryDashboardPreferences = updated;
+    this.dirty = true;
+    this.scheduleFlush();
+    return updated;
+  }
+
+  async replaceDashboardPreferences(
+    next: DashboardPreferences,
+  ): Promise<DashboardPreferences> {
+    this.inMemoryDashboardPreferences = normalizeDashboardPreferences(next);
+    this.dirty = true;
+    this.scheduleFlush();
+    return this.inMemoryDashboardPreferences;
   }
 
   private markModelAliasModified(aliasId: string, alias: ModelAlias) {

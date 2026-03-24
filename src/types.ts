@@ -1,5 +1,69 @@
 export type ProviderId = "openai" | "mistral";
 
+export type DashboardRangePreset = "24h" | "7d" | "30d" | "all";
+
+export type DashboardTabId =
+  | "overview"
+  | "accounts"
+  | "aliases"
+  | "tracing"
+  | "playground"
+  | "docs";
+
+export type TracingCardId =
+  | "tokensOverTime"
+  | "modelUsage"
+  | "modelCost"
+  | "errorTrend"
+  | "costOverTime"
+  | "latency"
+  | "tokenSplit"
+  | "accountRequestShare"
+  | "accountTokenShare"
+  | "accountCostShare"
+  | "usageByAccount"
+  | "usageByRoute"
+  | "topSessions";
+
+export type TopSessionsSortKey =
+  | "requests"
+  | "tokens"
+  | "costUsd"
+  | "avgLatencyMs"
+  | "lastAt";
+
+export type TopSessionsSortDirection = "asc" | "desc";
+
+export type TopSessionsSortState = {
+  key: TopSessionsSortKey;
+  direction: TopSessionsSortDirection;
+};
+
+export type AccountsSectionId =
+  | "requestsByAccount"
+  | "tokensByAccount"
+  | "costByAccount"
+  | "providerQuota";
+
+export type DashboardPreferences = {
+  tabOrder: DashboardTabId[];
+  ranges: {
+    overview: DashboardRangePreset;
+    accounts: DashboardRangePreset;
+    tracing: DashboardRangePreset;
+  };
+  tracing: {
+    cardOrder: TracingCardId[];
+    hiddenCards: TracingCardId[];
+    graphsHidden: boolean;
+    topSessionsSort: TopSessionsSortState;
+  };
+  accounts: {
+    sectionOrder: AccountsSectionId[];
+    hiddenSections: AccountsSectionId[];
+  };
+};
+
 export type UsageWindow = {
   usedPercent?: number;
   resetAt?: number; // epoch ms
@@ -9,6 +73,8 @@ export type UsageSnapshot = {
   primary?: UsageWindow; // ~5h window
   secondary?: UsageWindow; // weekly window
   fetchedAt: number;
+  scope?: "account" | "unscoped" | "unsupported";
+  degradedReason?: string;
 };
 
 export type AccountError = {
@@ -60,6 +126,7 @@ export type ModelAlias = {
 export type StoreFile = {
   accounts: Account[];
   modelAliases?: ModelAlias[];
+  dashboardPreferences?: DashboardPreferences;
 };
 
 export type OAuthFlowState = {

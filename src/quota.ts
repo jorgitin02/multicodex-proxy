@@ -225,13 +225,40 @@ export function chooseAccountForProvider(
   return chooseAccount(accounts.filter((a) => normalizeProvider(a) === provider));
 }
 
-export async function refreshUsageIfNeeded(account: Account, chatgptBaseUrl: string, force = false): Promise<Account> {
+type RefreshUsageOptions = {
+  requireAccountScope?: boolean;
+};
+
+export async function refreshUsageIfNeeded(
+  account: Account,
+  chatgptBaseUrl: string,
+  force = false,
+  options: RefreshUsageOptions = {},
+): Promise<Account> {
   if (!force && account.usage && Date.now() - account.usage.fetchedAt < USAGE_CACHE_TTL_MS) return account;
   const provider = normalizeProvider(account);
+  const now = Date.now();
   if (provider === "mistral") {
     account.usage = {
       ...account.usage,
-      fetchedAt: Date.now(),
+      fetchedAt: now,
+      scope: "unsupported",
+      degradedReason: "Provider quota refresh is not implemented for Mistral accounts.",
+    };
+    return account;
+  }
+
+  if (!account.chatgptAccountId && options.requireAccountScope) {
+    account.usage = {
+      ...account.usage,
+      fetchedAt: now,
+      scope: "unscoped",
+      degradedReason:
+        "Missing ChatGPT account ID; provider quota cannot be refreshed reliably for this account.",
+    };
+    account.state = {
+      ...account.state,
+      lastUsageRefreshAt: now,
     };
     return account;
   }
@@ -250,9 +277,15 @@ export async function refreshUsageIfNeeded(account: Account, chatgptBaseUrl: str
     const res = await fetch(usageUrl, { headers, signal: controller.signal });
     if (!res.ok) throw new Error(`usage probe failed ${res.status}`);
     const json = await res.json();
-    account.usage = parseOpenAIUsage(json);
+    account.usage = {
+      ...parseOpenAIUsage(json),
+      scope: account.chatgptAccountId ? "account" : "unscoped",
+      degradedReason: account.chatgptAccountId
+        ? undefined
+        : "Missing ChatGPT account ID; provider quota may not match this account.",
+    };
     clearAuthFailureState(account);
-    account.state = { ...account.state, lastError: undefined };
+    account.state = { ...account.state, lastError: undefined, lastUsageRefreshAt: now };
     return account;
   } catch (err: any) {
     rememberError(account, err?.message ?? String(err));

@@ -7,7 +7,19 @@ export type Account = {
   refreshToken?: string;
   chatgptAccountId?: string;
   priority?: number;
-  usage?: any;
+  usage?: {
+    fetchedAt: number;
+    primary?: {
+      usedPercent?: number;
+      resetAt?: number;
+    };
+    secondary?: {
+      usedPercent?: number;
+      resetAt?: number;
+    };
+    scope?: "account" | "unscoped" | "unsupported";
+    degradedReason?: string;
+  };
   state?: any;
 };
 
@@ -122,6 +134,59 @@ export type TracePagination = {
 };
 
 export type TraceRangePreset = "24h" | "7d" | "30d" | "all";
+
+export type DashboardTabId =
+  | "overview"
+  | "accounts"
+  | "aliases"
+  | "tracing"
+  | "playground"
+  | "docs";
+
+export type TracingCardId =
+  | "tokensOverTime"
+  | "modelUsage"
+  | "modelCost"
+  | "errorTrend"
+  | "costOverTime"
+  | "latency"
+  | "tokenSplit"
+  | "accountRequestShare"
+  | "accountTokenShare"
+  | "accountCostShare"
+  | "usageByAccount"
+  | "usageByRoute"
+  | "topSessions";
+
+export type AccountsSectionId =
+  | "requestsByAccount"
+  | "tokensByAccount"
+  | "costByAccount"
+  | "providerQuota";
+
+export type TopSessionsSortState = {
+  key: "requests" | "tokens" | "costUsd" | "avgLatencyMs" | "lastAt";
+  direction: "asc" | "desc";
+};
+
+export type DashboardPreferences = {
+  tabOrder: DashboardTabId[];
+  ranges: {
+    overview: TraceRangePreset;
+    accounts: TraceRangePreset;
+    tracing: TraceRangePreset;
+  };
+  tracing: {
+    cardOrder: TracingCardId[];
+    hiddenCards: TracingCardId[];
+    graphsHidden: boolean;
+    topSessionsSort: TopSessionsSortState;
+  };
+  accounts: {
+    sectionOrder: AccountsSectionId[];
+    hiddenSections: AccountsSectionId[];
+  };
+};
 
 export type Tab =
   | "overview"
