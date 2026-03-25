@@ -1,7 +1,16 @@
-import type { Account, ProviderId, UsageSnapshot } from "./types.js";
+import type {
+  Account,
+  ProviderId,
+  ProxyRoutingMode,
+  QuotaProfile,
+  UsageSnapshot,
+  UsageWindow,
+} from "./types.js";
 import { MODEL_COMPATIBILITY_TTL_MS } from "./config.js";
 
-export const USAGE_CACHE_TTL_MS = Number(process.env.USAGE_CACHE_TTL_MS ?? 300_000);
+export const USAGE_CACHE_TTL_MS = Number(
+  process.env.USAGE_CACHE_TTL_MS ?? 300_000,
+);
 const USAGE_TIMEOUT_MS = Number(process.env.USAGE_TIMEOUT_MS ?? 10_000);
 const BLOCK_FALLBACK_MS = Number(process.env.BLOCK_FALLBACK_MS ?? 30 * 60_000);
 const DEFAULT_ROUTING_WINDOW_MS = Number(process.env.ROUTING_WINDOW_MS ?? 0);
@@ -10,12 +19,20 @@ const AUTH_FALLBACK_MS = Number(process.env.AUTH_FALLBACK_MS ?? 60 * 60_000);
 type RouteCache = {
   accountId?: string;
   bucketByWindowMs: Map<number, number>;
+  roundRobinAccountIdByProvider: Map<ProviderId, string>;
 };
 
 const routeCache: RouteCache = {
   accountId: undefined,
   bucketByWindowMs: new Map(),
+  roundRobinAccountIdByProvider: new Map(),
 };
+
+export function resetRoutingStateForTest() {
+  routeCache.accountId = undefined;
+  routeCache.bucketByWindowMs.clear();
+  routeCache.roundRobinAccountIdByProvider.clear();
+}
 
 export function normalizeProvider(account?: Account): ProviderId {
   return account?.provider === "mistral" ? "mistral" : "openai";
@@ -30,34 +47,106 @@ function safePct(v?: number): number {
   return Math.max(0, Math.min(100, v));
 }
 
-function scoreAccount(account: Account): number {
-  const p = safePct(account.usage?.primary?.usedPercent);
-  const w = safePct(account.usage?.secondary?.usedPercent);
-
-  const mean = (p + w) / 2;
-  const imbalance = Math.abs(p - w);
-  return mean * 0.75 + imbalance * 0.25;
+function hasUsageWindow(window?: UsageWindow): boolean {
+  return (
+    typeof window?.usedPercent === "number" ||
+    typeof window?.resetAt === "number"
+  );
 }
 
-function parseUsage(data: any): UsageSnapshot {
+function inferQuotaProfile(
+  account: Account,
+): Exclude<QuotaProfile, "auto"> | undefined {
+  if (account.quotaProfile && account.quotaProfile !== "auto") {
+    return account.quotaProfile;
+  }
+  if (account.usage?.profile) return account.usage.profile;
+  if (
+    hasUsageWindow(account.usage?.primary) &&
+    hasUsageWindow(account.usage?.secondary)
+  ) {
+    return "windowed_and_weekly";
+  }
+  if (
+    !hasUsageWindow(account.usage?.primary) &&
+    hasUsageWindow(account.usage?.secondary)
+  ) {
+    return "weekly_only";
+  }
+  if (hasUsageWindow(account.usage?.primary)) {
+    return "windowed_and_weekly";
+  }
+  return undefined;
+}
+
+function relevantUsageWindowsForAccount(account: Account): UsageWindow[] {
+  const profile = inferQuotaProfile(account);
+  if (profile === "weekly_only") {
+    return account.usage?.secondary ? [account.usage.secondary] : [];
+  }
+  return [account.usage?.primary, account.usage?.secondary].filter(
+    (window): window is UsageWindow => hasUsageWindow(window),
+  );
+}
+
+function relevantUsagePercents(account: Account): number[] {
+  return relevantUsageWindowsForAccount(account).map((window) =>
+    safePct(window.usedPercent),
+  );
+}
+
+function scoreAccount(account: Account): number {
+  const values = relevantUsagePercents(account);
+  if (!values.length) return 0;
+
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const imbalance =
+    values.length > 1 ? Math.max(...values) - Math.min(...values) : 0;
+  return mean + imbalance * 0.25;
+}
+
+function parseUsage(data: any, account?: Account): UsageSnapshot {
   const primary = data?.rate_limit?.primary_window;
   const secondary = data?.rate_limit?.secondary_window;
   const toWindow = (w: any) =>
     w
       ? {
-          usedPercent: typeof w.used_percent === "number" ? Math.max(0, Math.min(100, w.used_percent)) : undefined,
-          resetAt: typeof w.reset_at === "number" ? w.reset_at * 1000 : undefined,
+          usedPercent:
+            typeof w.used_percent === "number"
+              ? Math.max(0, Math.min(100, w.used_percent))
+              : undefined,
+          resetAt:
+            typeof w.reset_at === "number" ? w.reset_at * 1000 : undefined,
         }
       : undefined;
-  return { primary: toWindow(primary), secondary: toWindow(secondary), fetchedAt: Date.now() };
+  const snapshot: UsageSnapshot = {
+    primary: toWindow(primary),
+    secondary: toWindow(secondary),
+    fetchedAt: Date.now(),
+  };
+  const inferredProfile =
+    account?.quotaProfile && account.quotaProfile !== "auto"
+      ? account.quotaProfile
+      : !snapshot.primary && snapshot.secondary
+        ? "weekly_only"
+        : snapshot.primary
+          ? "windowed_and_weekly"
+          : undefined;
+  return {
+    ...snapshot,
+    profile: inferredProfile,
+  };
 }
 
-function parseOpenAIUsage(data: any): UsageSnapshot {
-  return parseUsage(data);
+function parseOpenAIUsage(data: any, account?: Account): UsageSnapshot {
+  return parseUsage(data, account);
 }
 
 export function rememberError(account: Account, message: string) {
-  const next = [{ at: Date.now(), message }, ...(account.state?.recentErrors ?? [])].slice(0, 10);
+  const next = [
+    { at: Date.now(), message },
+    ...(account.state?.recentErrors ?? []),
+  ].slice(0, 10);
   account.state = { ...account.state, lastError: message, recentErrors: next };
 }
 
@@ -98,21 +187,58 @@ export function clearAuthFailureState(account: Account) {
   };
 }
 
-export function usageUntouched(usage?: UsageSnapshot): boolean {
-  return usage?.primary?.usedPercent === 0 && usage?.secondary?.usedPercent === 0;
+export function usageUntouched(
+  usage?: UsageSnapshot,
+  account?: Account,
+): boolean {
+  const effectiveAccount = account ?? {
+    id: "usage",
+    enabled: true,
+    accessToken: "",
+    usage,
+  };
+  const values = relevantUsagePercents(effectiveAccount as Account);
+  return values.length > 0 && values.every((value) => value === 0);
 }
 
-export function weeklyResetAt(usage?: UsageSnapshot): number | undefined {
+export function weeklyResetAt(
+  usage?: UsageSnapshot,
+  account?: Account,
+): number | undefined {
+  const effectiveAccount = account ?? {
+    id: "usage",
+    enabled: true,
+    accessToken: "",
+    usage,
+  };
+  const profile = inferQuotaProfile(effectiveAccount as Account);
+  if (profile === "weekly_only" || profile === "windowed_and_weekly") {
+    return usage?.secondary?.resetAt;
+  }
   return usage?.secondary?.resetAt;
 }
 
-export function nextResetAt(usage?: UsageSnapshot): number | undefined {
-  const list = [usage?.primary?.resetAt, usage?.secondary?.resetAt].filter((x): x is number => typeof x === "number");
+export function nextResetAt(
+  usage?: UsageSnapshot,
+  account?: Account,
+): number | undefined {
+  const effectiveAccount = account ?? {
+    id: "usage",
+    enabled: true,
+    accessToken: "",
+    usage,
+  };
+  const windows = relevantUsageWindowsForAccount(effectiveAccount as Account);
+  const list = windows
+    .map((window) => window.resetAt)
+    .filter((x): x is number => typeof x === "number");
   return list.length ? Math.min(...list) : undefined;
 }
 
 export function isQuotaErrorText(s: string): boolean {
-  return /\b429\b|quota|usage limit|rate.?limit|too many requests|limit reached|capacity/i.test(s);
+  return /\b429\b|quota|usage limit|rate.?limit|too many requests|limit reached|capacity/i.test(
+    s,
+  );
 }
 
 export function accountUsable(a: Account): boolean {
@@ -128,7 +254,10 @@ function normalizeModelKey(model?: string): string {
   return raw.split("/").pop() ?? raw;
 }
 
-export function accountSupportsModel(account: Account, model?: string): boolean {
+export function accountSupportsModel(
+  account: Account,
+  model?: string,
+): boolean {
   const key = normalizeModelKey(model);
   if (!key) return true;
   const record = account.state?.modelAvailability?.[key];
@@ -158,8 +287,17 @@ export function markModelCompatibility(
   };
 }
 
-export function chooseAccount(accounts: Account[]): Account | null {
+type ChooseAccountOptions = {
+  routingMode?: ProxyRoutingMode;
+  provider?: ProviderId;
+};
+
+export function chooseAccount(
+  accounts: Account[],
+  options: ChooseAccountOptions = {},
+): Account | null {
   const now = Date.now();
+  const routingMode = options.routingMode ?? "quota_aware";
   const windowMs =
     Number.isFinite(DEFAULT_ROUTING_WINDOW_MS) && DEFAULT_ROUTING_WINDOW_MS > 0
       ? DEFAULT_ROUTING_WINDOW_MS
@@ -172,6 +310,27 @@ export function chooseAccount(accounts: Account[]): Account | null {
   });
   if (!available.length) return null;
 
+  if (routingMode === "round_robin") {
+    const providerKey = options.provider ?? normalizeProvider(available[0]);
+    const sorted = [...available].sort((a, b) => {
+      const ap = a.priority ?? Number.MAX_SAFE_INTEGER;
+      const bp = b.priority ?? Number.MAX_SAFE_INTEGER;
+      if (ap !== bp) return ap - bp;
+      return a.id.localeCompare(b.id);
+    });
+    const previousId =
+      routeCache.roundRobinAccountIdByProvider.get(providerKey);
+    const previousIndex = previousId
+      ? sorted.findIndex((account) => account.id === previousId)
+      : -1;
+    const winner =
+      sorted[(previousIndex + 1 + sorted.length) % sorted.length] ?? null;
+    if (winner) {
+      routeCache.roundRobinAccountIdByProvider.set(providerKey, winner.id);
+    }
+    return winner;
+  }
+
   if (windowMs > 0) {
     const bucket = nowBucket(now, windowMs);
     const stickyBucket = routeCache.bucketByWindowMs.get(windowMs);
@@ -181,11 +340,7 @@ export function chooseAccount(accounts: Account[]): Account | null {
     }
   }
 
-  const untouched = available.filter((a) => {
-    const p = safePct(a.usage?.primary?.usedPercent);
-    const w = safePct(a.usage?.secondary?.usedPercent);
-    return p === 0 && w === 0;
-  });
+  const untouched = available.filter((a) => usageUntouched(a.usage, a));
 
   const pool = untouched.length ? untouched : available;
 
@@ -221,8 +376,15 @@ export function chooseAccount(accounts: Account[]): Account | null {
 export function chooseAccountForProvider(
   accounts: Account[],
   provider: ProviderId,
+  options: Omit<ChooseAccountOptions, "provider"> = {},
 ): Account | null {
-  return chooseAccount(accounts.filter((a) => normalizeProvider(a) === provider));
+  return chooseAccount(
+    accounts.filter((a) => normalizeProvider(a) === provider),
+    {
+      ...options,
+      provider,
+    },
+  );
 }
 
 type RefreshUsageOptions = {
@@ -235,7 +397,12 @@ export async function refreshUsageIfNeeded(
   force = false,
   options: RefreshUsageOptions = {},
 ): Promise<Account> {
-  if (!force && account.usage && Date.now() - account.usage.fetchedAt < USAGE_CACHE_TTL_MS) return account;
+  if (
+    !force &&
+    account.usage &&
+    Date.now() - account.usage.fetchedAt < USAGE_CACHE_TTL_MS
+  )
+    return account;
   const provider = normalizeProvider(account);
   const now = Date.now();
   if (provider === "mistral") {
@@ -243,7 +410,8 @@ export async function refreshUsageIfNeeded(
       ...account.usage,
       fetchedAt: now,
       scope: "unsupported",
-      degradedReason: "Provider quota refresh is not implemented for Mistral accounts.",
+      degradedReason:
+        "Provider quota refresh is not implemented for Mistral accounts.",
     };
     return account;
   }
@@ -278,14 +446,18 @@ export async function refreshUsageIfNeeded(
     if (!res.ok) throw new Error(`usage probe failed ${res.status}`);
     const json = await res.json();
     account.usage = {
-      ...parseOpenAIUsage(json),
+      ...parseOpenAIUsage(json, account),
       scope: account.chatgptAccountId ? "account" : "unscoped",
       degradedReason: account.chatgptAccountId
         ? undefined
         : "Missing ChatGPT account ID; provider quota may not match this account.",
     };
     clearAuthFailureState(account);
-    account.state = { ...account.state, lastError: undefined, lastUsageRefreshAt: now };
+    account.state = {
+      ...account.state,
+      lastError: undefined,
+      lastUsageRefreshAt: now,
+    };
     return account;
   } catch (err: any) {
     rememberError(account, err?.message ?? String(err));
@@ -296,7 +468,8 @@ export async function refreshUsageIfNeeded(
 }
 
 export function markQuotaHit(account: Account, message: string) {
-  const until = nextResetAt(account.usage) ?? Date.now() + BLOCK_FALLBACK_MS;
+  const until =
+    nextResetAt(account.usage, account) ?? Date.now() + BLOCK_FALLBACK_MS;
   account.state = {
     ...account.state,
     blockedUntil: until,

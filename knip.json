@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": ["src/server.ts", "src/responses-bridge.ts", "web/src/main.tsx"],
+  "project": [
+    "src/**/*.ts",
+    "web/src/**/*.ts",
+    "web/src/**/*.tsx",
+    "test/**/*.js"
+  ],
+  "ignoreDependencies": ["react", "react-dom", "recharts"],
+  "ignore": ["src/responses-bridge.ts"]
+}

@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 
 type Envelope = {
   v: 1;

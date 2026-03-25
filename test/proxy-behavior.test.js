@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import http from "node:http";
 import { readFile } from "node:fs/promises";
-import { createTempDir, startHttpServer, startRuntime, writeJson } from "./helpers.js";
+import {
+  createTempDir,
+  startHttpServer,
+  startRuntime,
+  writeJson,
+} from "./helpers.js";
 import { resetDiscoveredModelsCacheForTest } from "../dist/routes/proxy/index.js";
 
 function responseObject(text = "OK") {
@@ -131,10 +136,119 @@ test("proxy fails over on model incompatibility and records capability state", a
     assert.equal(account1.state.blockedUntil, undefined);
     assert.equal(account1.state.blockedReason, undefined);
     assert.match(account1.state.lastError, /model unsupported/i);
-    assert.equal(
-      account1.state.modelAvailability["gpt-5.4"].supported,
-      false,
-    );
+    assert.equal(account1.state.modelAvailability["gpt-5.4"].supported, false);
+  } finally {
+    await runtime.close();
+    await upstream.close();
+  }
+});
+
+test("proxy round robin mode rotates requests across eligible accounts even when priorities differ", async () => {
+  resetDiscoveredModelsCacheForTest();
+  const seenAccounts = [];
+  const upstream = await startHttpServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/backend-api/wham/usage") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 0 },
+            secondary_window: { used_percent: 0 },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      req.url?.startsWith("/backend-api/codex/models")
+    ) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ models: [{ slug: "gpt-5.4" }] }));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
+      seenAccounts.push(req.headers.authorization ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(responseObject("OK")));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+
+  const tmp = await createTempDir();
+  const storePath = path.join(tmp, "accounts.json");
+  const oauthStatePath = path.join(tmp, "oauth-state.json");
+  const traceFilePath = path.join(tmp, "traces.jsonl");
+  const traceStatsHistoryPath = path.join(tmp, "traces-history.jsonl");
+  await writeJson(storePath, {
+    accounts: [
+      {
+        id: "acct-1",
+        provider: "openai",
+        accessToken: "acct-1-token",
+        enabled: true,
+        priority: 0,
+        usage: {
+          fetchedAt: Date.now(),
+          primary: { usedPercent: 0 },
+          secondary: { usedPercent: 0 },
+        },
+        state: {},
+      },
+      {
+        id: "acct-2",
+        provider: "openai",
+        accessToken: "acct-2-token",
+        enabled: true,
+        priority: 10,
+        usage: {
+          fetchedAt: Date.now(),
+          primary: { usedPercent: 0 },
+          secondary: { usedPercent: 0 },
+        },
+        state: {},
+      },
+    ],
+    modelAliases: [],
+    proxySettings: {
+      routingMode: "round_robin",
+    },
+  });
+  await writeJson(oauthStatePath, { states: [] });
+
+  const runtime = await startRuntime({
+    storePath,
+    oauthStatePath,
+    traceFilePath,
+    traceStatsHistoryPath,
+    openaiBaseUrl: upstream.url,
+  });
+
+  try {
+    const body = JSON.stringify({
+      model: "gpt-5.4",
+      stream: false,
+      input: "reply with ok",
+    });
+
+    const first = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    const second = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.deepEqual(seenAccounts, [
+      "Bearer acct-1-token",
+      "Bearer acct-2-token",
+    ]);
   } finally {
     await runtime.close();
     await upstream.close();
@@ -1050,7 +1164,10 @@ test("proxy closes a stalled streamed response without crashing after headers ar
     assert.equal(first.status, 200);
     const firstBody = await first.text();
     const firstElapsed = Date.now() - firstStartedAt;
-    assert.ok(firstElapsed < 180, `expected stall close promptly, got ${firstElapsed}ms`);
+    assert.ok(
+      firstElapsed < 180,
+      `expected stall close promptly, got ${firstElapsed}ms`,
+    );
     assert.match(firstBody, /response\.output_text\.delta/);
 
     const second = await fetch(`${runtime.baseUrl}/v1/responses`, {
@@ -1154,7 +1271,10 @@ test("proxy closes streamed responses once response.completed arrives", async ()
     const body = await res.text();
     const elapsedMs = Date.now() - startedAt;
     assert.match(body, /response\.completed/);
-    assert.ok(elapsedMs < 180, `expected proxy to close promptly, got ${elapsedMs}ms`);
+    assert.ok(
+      elapsedMs < 180,
+      `expected proxy to close promptly, got ${elapsedMs}ms`,
+    );
   } finally {
     await runtime.close();
     await upstream.close();
@@ -1189,13 +1309,21 @@ test("proxy preserves control frames for native streamed responses", async () =>
       res.write(
         `event: response.created\ndata: ${JSON.stringify({
           type: "response.created",
-          response: { id: "resp_123", object: "response", status: "in_progress" },
+          response: {
+            id: "resp_123",
+            object: "response",
+            status: "in_progress",
+          },
         })}\n\n`,
       );
       res.write(
         `event: response.in_progress\ndata: ${JSON.stringify({
           type: "response.in_progress",
-          response: { id: "resp_123", object: "response", status: "in_progress" },
+          response: {
+            id: "resp_123",
+            object: "response",
+            status: "in_progress",
+          },
         })}\n\n`,
       );
       res.write(
@@ -1375,16 +1503,15 @@ test("proxy forwards partial native response chunks before a full SSE frame is c
     if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.flushHeaders();
-      const createdFrame =
-        `event: response.created\ndata: ${JSON.stringify({
-          type: "response.created",
-          response: {
-            id: "resp_123",
-            object: "response",
-            status: "in_progress",
-            metadata: { pad: "x".repeat(4096) },
-          },
-        })}\n\n`;
+      const createdFrame = `event: response.created\ndata: ${JSON.stringify({
+        type: "response.created",
+        response: {
+          id: "resp_123",
+          object: "response",
+          status: "in_progress",
+          metadata: { pad: "x".repeat(4096) },
+        },
+      })}\n\n`;
       const splitAt = Math.floor(createdFrame.length / 2);
       res.write(createdFrame.slice(0, splitAt));
       setTimeout(() => {
@@ -1441,7 +1568,10 @@ test("proxy forwards partial native response chunks before a full SSE frame is c
     const firstChunkMs = Date.now() - startedAt;
     const decoder = new TextDecoder();
     let body = first.done ? "" : decoder.decode(first.value, { stream: true });
-    assert.ok(firstChunkMs < 120, `expected first chunk promptly, got ${firstChunkMs}ms`);
+    assert.ok(
+      firstChunkMs < 120,
+      `expected first chunk promptly, got ${firstChunkMs}ms`,
+    );
     assert.match(body, /response\.created/);
 
     while (true) {
@@ -1538,7 +1668,10 @@ test("proxy preserves native streamed responses that end after response.output_t
     const elapsedMs = Date.now() - startedAt;
     assert.match(body, /response\.output_text\.done/);
     assert.doesNotMatch(body, /response\.completed/);
-    assert.ok(elapsedMs < 180, `expected proxy to close promptly, got ${elapsedMs}ms`);
+    assert.ok(
+      elapsedMs < 180,
+      `expected proxy to close promptly, got ${elapsedMs}ms`,
+    );
   } finally {
     await runtime.close();
     await upstream.close();
@@ -1623,7 +1756,10 @@ test("proxy returns a buffered response once response.output_text.done arrives",
 
     const elapsedMs = Date.now() - startedAt;
     assert.equal(res.status, 200);
-    assert.ok(elapsedMs < 180, `expected proxy to return promptly, got ${elapsedMs}ms`);
+    assert.ok(
+      elapsedMs < 180,
+      `expected proxy to return promptly, got ${elapsedMs}ms`,
+    );
     const body = await res.json();
     assert.equal(body.output[0].content[0].text, "hello");
   } finally {

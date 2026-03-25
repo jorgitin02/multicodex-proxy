@@ -1,0 +1,27 @@
+- name: bug
+  color: d73a4a
+  description: Something isn't working
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+- name: chore
+  color: cfd3d7
+  description: Maintenance work
+- name: priority:high
+  color: b60205
+  description: Needs prompt attention
+- name: priority:medium
+  color: fbca04
+  description: Important but not urgent
+- name: priority:low
+  color: 0e8a16
+  description: Nice to have
+- name: area:proxy
+  color: 1d76db
+  description: Proxy routing and upstream behavior
+- name: area:dashboard
+  color: 5319e7
+  description: Admin dashboard and UX
+- name: area:infra
+  color: 0052cc
+  description: CI, release, deployment, or security automation

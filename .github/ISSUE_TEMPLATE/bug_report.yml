@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a defect in routing, quota handling, or the dashboard
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include request shape, provider, and account conditions when relevant
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation evidence
+      description: Tests, traces, screenshots, or logs

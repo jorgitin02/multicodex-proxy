@@ -1,7 +1,13 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { AccountStore, OAuthStateStore } from "../../store.js";
-import type { Account, DashboardPreferences, ModelAlias } from "../../types.js";
+import type {
+  Account,
+  DashboardPreferences,
+  ModelAlias,
+  ProxySettings,
+  QuotaProfile,
+} from "../../types.js";
 import {
   clearAuthFailureState,
   normalizeProvider,
@@ -52,7 +58,9 @@ function parseQueryNumber(v: unknown): number | undefined {
 function redact(account: Account) {
   return {
     ...account,
-    accessToken: account.accessToken ? `${account.accessToken.slice(0, 8)}...` : "",
+    accessToken: account.accessToken
+      ? `${account.accessToken.slice(0, 8)}...`
+      : "",
     refreshToken: account.refreshToken
       ? `${account.refreshToken.slice(0, 8)}...`
       : undefined,
@@ -77,6 +85,7 @@ const ACCOUNT_MUTABLE_KEYS = new Set([
   "chatgptAccountId",
   "enabled",
   "priority",
+  "quotaProfile",
 ]);
 
 function rejectUnknownKeys(
@@ -109,7 +118,8 @@ function parseAccountPatch(
     patch.provider = body.provider;
   }
   if (typeof body.email !== "undefined") {
-    if (typeof body.email !== "string") return { error: "email must be a string" };
+    if (typeof body.email !== "string")
+      return { error: "email must be a string" };
     patch.email = body.email.trim() || undefined;
   }
   if (typeof body.accessToken !== "undefined") {
@@ -145,13 +155,13 @@ function parseAccountPatch(
       return { error: "chatgptAccountId must be a string" };
     }
     patch.chatgptAccountId =
-      typeof body.chatgptAccountId === "string" &&
-      body.chatgptAccountId.trim()
+      typeof body.chatgptAccountId === "string" && body.chatgptAccountId.trim()
         ? body.chatgptAccountId.trim()
         : undefined;
   }
   if (typeof body.enabled !== "undefined") {
-    if (typeof body.enabled !== "boolean") return { error: "enabled must be a boolean" };
+    if (typeof body.enabled !== "boolean")
+      return { error: "enabled must be a boolean" };
     patch.enabled = body.enabled;
   }
   if (typeof body.priority !== "undefined") {
@@ -159,6 +169,18 @@ function parseAccountPatch(
       return { error: "priority must be a finite number" };
     }
     patch.priority = Number(body.priority);
+  }
+  if (typeof body.quotaProfile !== "undefined") {
+    if (
+      body.quotaProfile !== "auto" &&
+      body.quotaProfile !== "weekly_only" &&
+      body.quotaProfile !== "windowed_and_weekly"
+    ) {
+      return {
+        error: "quotaProfile must be auto, weekly_only, or windowed_and_weekly",
+      };
+    }
+    patch.quotaProfile = body.quotaProfile as QuotaProfile;
   }
   return { patch };
 }
@@ -187,8 +209,18 @@ function filterTracesByWindow<T extends { at: number }>(
   untilMs?: number,
 ): T[] {
   return traces.filter((t) => {
-    if (typeof sinceMs === "number" && Number.isFinite(sinceMs) && t.at < sinceMs) return false;
-    if (typeof untilMs === "number" && Number.isFinite(untilMs) && t.at > untilMs) return false;
+    if (
+      typeof sinceMs === "number" &&
+      Number.isFinite(sinceMs) &&
+      t.at < sinceMs
+    )
+      return false;
+    if (
+      typeof untilMs === "number" &&
+      Number.isFinite(untilMs) &&
+      t.at > untilMs
+    )
+      return false;
     return true;
   });
 }
@@ -211,7 +243,7 @@ const CRC32_TABLE = (() => {
   for (let n = 0; n < 256; n += 1) {
     let c = n;
     for (let k = 0; k < 8; k += 1) {
-      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     }
     table[n] = c >>> 0;
   }
@@ -322,6 +354,46 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     res.json({
       ok: true,
       oauthRedirectUri: oauthConfig.redirectUri,
+      proxySettings: store.getCachedProxySettings(),
+      storage: {
+        accountsPath: storagePaths.accountsPath,
+        oauthStatePath: storagePaths.oauthStatePath,
+        tracePath: storagePaths.tracePath,
+        traceStatsHistoryPath: storagePaths.traceStatsHistoryPath,
+        persistenceLikelyEnabled:
+          storagePaths.accountsPath.startsWith("/data/") ||
+          storagePaths.accountsPath.startsWith("/data"),
+      },
+    });
+  });
+
+  router.patch("/config", async (req, res) => {
+    const body =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const proxySettings =
+      body.proxySettings && typeof body.proxySettings === "object"
+        ? (body.proxySettings as Partial<ProxySettings>)
+        : undefined;
+    if (typeof proxySettings?.routingMode !== "undefined") {
+      if (
+        proxySettings.routingMode !== "quota_aware" &&
+        proxySettings.routingMode !== "round_robin"
+      ) {
+        return res
+          .status(400)
+          .json({ error: "routingMode must be quota_aware or round_robin" });
+      }
+    }
+
+    const nextProxySettings = await store.patchProxySettings({
+      routingMode: proxySettings?.routingMode,
+    });
+    res.json({
+      ok: true,
+      oauthRedirectUri: oauthConfig.redirectUri,
+      proxySettings: nextProxySettings,
       storage: {
         accountsPath: storagePaths.accountsPath,
         oauthStatePath: storagePaths.oauthStatePath,
@@ -386,7 +458,8 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     const body = req.body ?? {};
     const patch: Partial<ModelAlias> = {};
 
-    if (typeof body.enabled !== "undefined") patch.enabled = Boolean(body.enabled);
+    if (typeof body.enabled !== "undefined")
+      patch.enabled = Boolean(body.enabled);
     if (typeof body.description !== "undefined") {
       patch.description =
         typeof body.description === "string" && body.description.trim()
@@ -469,9 +542,11 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     const { sinceMs, untilMs } = parseTraceWindowBounds(
       req.query as Record<string, unknown>,
     );
-    const traces = filterTracesByWindow(await readTraceWindow(), sinceMs, untilMs).sort(
-      (a, b) => a.at - b.at,
-    );
+    const traces = filterTracesByWindow(
+      await readTraceWindow(),
+      sinceMs,
+      untilMs,
+    ).sort((a, b) => a.at - b.at);
 
     const exportedAt = Date.now();
     const files: Array<{ name: string; data: Buffer }> = [
@@ -493,7 +568,8 @@ export function createAdminRouter(options: AdminRoutesOptions) {
       {
         name: "traces.jsonl",
         data: Buffer.from(
-          traces.map((t) => JSON.stringify(t)).join("\n") + (traces.length ? "\n" : ""),
+          traces.map((t) => JSON.stringify(t)).join("\n") +
+            (traces.length ? "\n" : ""),
           "utf8",
         ),
       },
@@ -526,9 +602,15 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     });
 
     const globalAgg = createUsageAggregate();
-    const byAccount = new Map<string, ReturnType<typeof createUsageAggregate>>();
+    const byAccount = new Map<
+      string,
+      ReturnType<typeof createUsageAggregate>
+    >();
     const byRoute = new Map<string, ReturnType<typeof createUsageAggregate>>();
-    const bySession = new Map<string, ReturnType<typeof createUsageAggregate>>();
+    const bySession = new Map<
+      string,
+      ReturnType<typeof createUsageAggregate>
+    >();
 
     for (const trace of filtered) {
       addTraceToAggregate(globalAgg, trace);
@@ -709,13 +791,18 @@ export function createAdminRouter(options: AdminRoutesOptions) {
 
   router.post("/oauth/start", async (req, res) => {
     const email = String(req.body?.email ?? "").trim();
-    const targetAccountId = String(req.body?.accountId ?? "").trim() || undefined;
+    const targetAccountId =
+      String(req.body?.accountId ?? "").trim() || undefined;
     if (!email) return res.status(400).json({ error: "email required" });
     if (targetAccountId) {
-      const account = (await store.listAccounts()).find((a) => a.id === targetAccountId);
+      const account = (await store.listAccounts()).find(
+        (a) => a.id === targetAccountId,
+      );
       if (!account) return res.status(404).json({ error: "account not found" });
       if ((account.provider ?? "openai") !== "openai") {
-        return res.status(400).json({ error: "oauth reauth is only supported for OpenAI accounts" });
+        return res.status(400).json({
+          error: "oauth reauth is only supported for OpenAI accounts",
+        });
       }
     }
     const flow = createOAuthState(email, targetAccountId);
@@ -739,9 +826,7 @@ export function createAdminRouter(options: AdminRoutesOptions) {
     const flowId = String(req.body?.flowId ?? "").trim();
     const input = String(req.body?.input ?? "").trim();
     if (!flowId || !input)
-      return res
-        .status(400)
-        .json({ error: "flowId and input are required" });
+      return res.status(400).json({ error: "flowId and input are required" });
 
     const flow = await oauthStore.get(flowId);
     if (!flow) return res.status(404).json({ error: "flow not found" });
@@ -760,7 +845,9 @@ export function createAdminRouter(options: AdminRoutesOptions) {
       );
       let account: Account;
       if (flow.targetAccountId) {
-        const existing = (await store.listAccounts()).find((a) => a.id === flow.targetAccountId);
+        const existing = (await store.listAccounts()).find(
+          (a) => a.id === flow.targetAccountId,
+        );
         if (!existing) {
           throw new Error("target account not found for reauth");
         }

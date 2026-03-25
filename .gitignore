@@ -1,7 +1,14 @@
 node_modules
 web/node_modules
+.DS_Store
+.idea
+.vscode
 dist
 web-dist
 .env
+.env.*
 web/*.tsbuildinfo
+.coverage
+.nyc_output
+coverage
 data

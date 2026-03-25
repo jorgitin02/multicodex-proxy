@@ -7,6 +7,7 @@ import type {
   ModelAlias,
   OAuthFlowState,
   OAuthStateFile,
+  ProxySettings,
   StoreFile,
 } from "./types.js";
 import { ACCOUNT_FLUSH_INTERVAL_MS } from "./config.js";
@@ -21,6 +22,9 @@ const DEFAULT_FILE: StoreFile = {
   accounts: [],
   modelAliases: [],
   dashboardPreferences: DEFAULT_DASHBOARD_PREFERENCES,
+  proxySettings: {
+    routingMode: "quota_aware",
+  },
 };
 const DEFAULT_OAUTH_FILE: OAuthStateFile = { states: [] };
 
@@ -57,7 +61,9 @@ async function readJsonFile<T>(
   const raw = await fs.readFile(filePath, "utf8");
   if (looksEncryptedJson(raw)) {
     if (!encryptionKey) {
-      throw new Error(`encrypted file requires STORE_ENCRYPTION_KEY: ${filePath}`);
+      throw new Error(
+        `encrypted file requires STORE_ENCRYPTION_KEY: ${filePath}`,
+      );
     }
     return decryptJson<T>(raw, encryptionKey);
   }
@@ -67,7 +73,9 @@ async function readJsonFile<T>(
 export class AccountStore {
   private inMemoryAccounts: Account[] = [];
   private inMemoryModelAliases: ModelAlias[] = [];
-  private inMemoryDashboardPreferences: DashboardPreferences = DEFAULT_DASHBOARD_PREFERENCES;
+  private inMemoryDashboardPreferences: DashboardPreferences =
+    DEFAULT_DASHBOARD_PREFERENCES;
+  private inMemoryProxySettings: ProxySettings = DEFAULT_FILE.proxySettings!;
   private dirty = false;
   private flushTimer: NodeJS.Timeout | null = null;
   private lastLoadedMtimeMs = 0;
@@ -83,7 +91,10 @@ export class AccountStore {
   }
 
   private async reloadFromDisk() {
-    const data = await readJsonFile<StoreFile>(this.filePath, this.encryptionKey);
+    const data = await readJsonFile<StoreFile>(
+      this.filePath,
+      this.encryptionKey,
+    );
     this.inMemoryAccounts = Array.isArray(data.accounts) ? data.accounts : [];
     this.inMemoryModelAliases = Array.isArray(data.modelAliases)
       ? data.modelAliases
@@ -91,6 +102,10 @@ export class AccountStore {
     this.inMemoryDashboardPreferences = normalizeDashboardPreferences(
       data.dashboardPreferences,
     );
+    this.inMemoryProxySettings =
+      data.proxySettings?.routingMode === "round_robin"
+        ? { routingMode: "round_robin" }
+        : { routingMode: "quota_aware" };
     this.dirty = false;
     const stat = await fs.stat(this.filePath);
     this.lastLoadedMtimeMs = stat.mtimeMs;
@@ -118,11 +133,16 @@ export class AccountStore {
 
   async flushIfDirty() {
     if (!this.dirty) return;
-    await writeJsonAtomic(this.filePath, {
-      accounts: this.inMemoryAccounts,
-      modelAliases: this.inMemoryModelAliases,
-      dashboardPreferences: this.inMemoryDashboardPreferences,
-    }, this.encryptionKey);
+    await writeJsonAtomic(
+      this.filePath,
+      {
+        accounts: this.inMemoryAccounts,
+        modelAliases: this.inMemoryModelAliases,
+        dashboardPreferences: this.inMemoryDashboardPreferences,
+        proxySettings: this.inMemoryProxySettings,
+      },
+      this.encryptionKey,
+    );
     this.dirty = false;
     try {
       const stat = await fs.stat(this.filePath);
@@ -139,11 +159,18 @@ export class AccountStore {
   }
 
   getCachedModelAliases(): ModelAlias[] {
-    return this.inMemoryModelAliases.map((a) => ({ ...a, targets: [...a.targets] }));
+    return this.inMemoryModelAliases.map((a) => ({
+      ...a,
+      targets: [...a.targets],
+    }));
   }
 
   getCachedDashboardPreferences(): DashboardPreferences {
     return normalizeDashboardPreferences(this.inMemoryDashboardPreferences);
+  }
+
+  getCachedProxySettings(): ProxySettings {
+    return { ...this.inMemoryProxySettings };
   }
 
   markAccountModified(accountId: string, account: Account) {
@@ -168,7 +195,10 @@ export class AccountStore {
     return account;
   }
 
-  async patchAccount(id: string, patch: Partial<Account>): Promise<Account | null> {
+  async patchAccount(
+    id: string,
+    patch: Partial<Account>,
+  ): Promise<Account | null> {
     const idx = this.inMemoryAccounts.findIndex((a) => a.id === id);
     if (idx === -1) return null;
     const existing = this.inMemoryAccounts[idx];
@@ -221,6 +251,26 @@ export class AccountStore {
     this.dirty = true;
     this.scheduleFlush();
     return this.inMemoryDashboardPreferences;
+  }
+
+  async getProxySettings(): Promise<ProxySettings> {
+    await this.reloadFromDiskIfChanged();
+    return this.getCachedProxySettings();
+  }
+
+  async patchProxySettings(
+    patch: Partial<ProxySettings>,
+  ): Promise<ProxySettings> {
+    this.inMemoryProxySettings = {
+      ...this.inMemoryProxySettings,
+      routingMode:
+        patch.routingMode === "round_robin"
+          ? "round_robin"
+          : this.inMemoryProxySettings.routingMode,
+    };
+    this.dirty = true;
+    this.scheduleFlush();
+    return this.getCachedProxySettings();
   }
 
   private markModelAliasModified(aliasId: string, alias: ModelAlias) {
@@ -295,7 +345,10 @@ export class OAuthStateStore {
 
   async create(state: OAuthFlowState) {
     const data = await this.read();
-    data.states = [state, ...data.states.filter((s) => s.id !== state.id)].slice(0, 200);
+    data.states = [
+      state,
+      ...data.states.filter((s) => s.id !== state.id),
+    ].slice(0, 200);
     await this.write(data);
   }
 
@@ -304,7 +357,10 @@ export class OAuthStateStore {
     return data.states.find((s) => s.id === id);
   }
 
-  async update(id: string, patch: Partial<OAuthFlowState>): Promise<OAuthFlowState | undefined> {
+  async update(
+    id: string,
+    patch: Partial<OAuthFlowState>,
+  ): Promise<OAuthFlowState | undefined> {
     const data = await this.read();
     const idx = data.states.findIndex((s) => s.id === id);
     if (idx === -1) return undefined;

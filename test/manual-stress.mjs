@@ -54,7 +54,12 @@ function oauthConfig(port) {
   };
 }
 
-async function startRuntimeFor(upstreamUrl, files, upstreamRequestTimeoutMs, redirectPort) {
+async function startRuntimeFor(
+  upstreamUrl,
+  files,
+  upstreamRequestTimeoutMs,
+  redirectPort,
+) {
   const runtime = await createRuntime({
     host: "127.0.0.1",
     port: 0,
@@ -221,42 +226,51 @@ const successUpstream = await startHttpServer(async (req, res) => {
   res.writeHead(404).end();
 });
 
-const successRuntime = await startRuntimeFor(successUpstream.url, files, 70, 20001);
+const successRuntime = await startRuntimeFor(
+  successUpstream.url,
+  files,
+  70,
+  20001,
+);
 const successStats = { total: 0, stream: 0, buffered: 0 };
 
-await runPool(Array.from({ length: 120 }, (_, i) => i), 12, async (i) => {
-  const wantStream = i % 2 === 0;
-  const startedAt = Date.now();
-  const res = await fetch(`${successRuntime.baseUrl}/v1/responses`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "gpt-5.4",
-      stream: wantStream,
-      input: `hello-${i}`,
-    }),
-  });
-  assert.equal(res.status, 200);
-  const elapsedMs = Date.now() - startedAt;
-  assert.ok(elapsedMs < 220, `request ${i} took too long: ${elapsedMs}ms`);
-  if (wantStream) {
-    const body = await res.text();
-    assert.ok(
-      body.includes("response.completed") ||
-        body.includes("response.output_text.done"),
-    );
-    successStats.stream += 1;
-  } else {
-    const body = await res.json();
-    const text = body?.output?.[0]?.content?.[0]?.text;
-    assert.ok(
-      text === "hello world" || text === "1234" || text === "json path",
-      `unexpected buffered text: ${text}`,
-    );
-    successStats.buffered += 1;
-  }
-  successStats.total += 1;
-});
+await runPool(
+  Array.from({ length: 120 }, (_, i) => i),
+  12,
+  async (i) => {
+    const wantStream = i % 2 === 0;
+    const startedAt = Date.now();
+    const res = await fetch(`${successRuntime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5.4",
+        stream: wantStream,
+        input: `hello-${i}`,
+      }),
+    });
+    assert.equal(res.status, 200);
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(elapsedMs < 220, `request ${i} took too long: ${elapsedMs}ms`);
+    if (wantStream) {
+      const body = await res.text();
+      assert.ok(
+        body.includes("response.completed") ||
+          body.includes("response.output_text.done"),
+      );
+      successStats.stream += 1;
+    } else {
+      const body = await res.json();
+      const text = body?.output?.[0]?.content?.[0]?.text;
+      assert.ok(
+        text === "hello world" || text === "1234" || text === "json path",
+        `unexpected buffered text: ${text}`,
+      );
+      successStats.buffered += 1;
+    }
+    successStats.total += 1;
+  },
+);
 
 await successRuntime.runtime.shutdown();
 await successUpstream.close();

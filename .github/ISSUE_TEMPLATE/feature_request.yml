@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a feature or workflow improvement
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and trade-offs
+      description: Mention quota, routing, persistence, or self-hosted deployment implications

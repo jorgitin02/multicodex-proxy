@@ -53,15 +53,13 @@ export async function startRuntime(options = {}) {
     port: 0,
     adminToken: "test-admin",
     installSignalHandlers: false,
-    oauthConfig:
-      options.oauthConfig ??
-      {
-        authorizationUrl: "https://auth.openai.com/oauth/authorize",
-        tokenUrl: "https://auth.openai.com/oauth/token",
-        clientId: "test-client",
-        scope: "openid profile email offline_access",
-        redirectUri: `http://127.0.0.1:${callbackPort}/auth/callback`,
-      },
+    oauthConfig: options.oauthConfig ?? {
+      authorizationUrl: "https://auth.openai.com/oauth/authorize",
+      tokenUrl: "https://auth.openai.com/oauth/token",
+      clientId: "test-client",
+      scope: "openid profile email offline_access",
+      redirectUri: `http://127.0.0.1:${callbackPort}/auth/callback`,
+    },
     ...options,
   });
   await runtime.start();

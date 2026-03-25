@@ -1,7 +1,9 @@
 import http from "node:http";
 
 function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost";
+  return (
+    hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost"
+  );
 }
 
 function callbackPageHtml() {
@@ -121,7 +123,9 @@ function callbackPageHtml() {
 </html>`;
 }
 
-export function createOAuthCallbackServer(redirectUri: string): http.Server | null {
+export function createOAuthCallbackServer(
+  redirectUri: string,
+): http.Server | null {
   let url: URL;
   try {
     url = new URL(redirectUri);
@@ -129,14 +133,21 @@ export function createOAuthCallbackServer(redirectUri: string): http.Server | nu
     return null;
   }
 
-  if (url.protocol !== "http:" || !isLoopbackHostname(url.hostname) || !url.port) {
+  if (
+    url.protocol !== "http:" ||
+    !isLoopbackHostname(url.hostname) ||
+    !url.port
+  ) {
     return null;
   }
 
   const expectedPath = url.pathname || "/";
 
   return http.createServer((req, res) => {
-    const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const requestUrl = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
 
     if (req.method !== "GET" || requestUrl.pathname !== expectedPath) {
       res.statusCode = 404;

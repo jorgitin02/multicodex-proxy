@@ -55,7 +55,9 @@ type Props = {
   moveTracingCard: (cardId: TracingCardId, direction: -1 | 1) => void;
   toggleTracingCardHidden: (cardId: TracingCardId) => void;
   setTracingGraphsHidden: (hidden: boolean) => void;
-  setTopSessionsSort: (sort: DashboardPreferences["tracing"]["topSessionsSort"]) => void;
+  setTopSessionsSort: (
+    sort: DashboardPreferences["tracing"]["topSessionsSort"],
+  ) => void;
   resetTracingLayout: () => void;
   traces: Trace[];
   expandedTraceId: string | null;
@@ -69,7 +71,8 @@ type Props = {
 
 type SessionUsageEntry = TraceUsageStats["bySession"][number];
 type SessionSortKey = DashboardPreferences["tracing"]["topSessionsSort"]["key"];
-type SessionSortDirection = DashboardPreferences["tracing"]["topSessionsSort"]["direction"];
+type SessionSortDirection =
+  DashboardPreferences["tracing"]["topSessionsSort"]["direction"];
 type TraceCardConfig = {
   title: string;
   fullSpan?: boolean;
@@ -109,7 +112,11 @@ function compareSessionEntries(
     case "avgLatencyMs":
       return compareNumbers(a.avgLatencyMs, b.avgLatencyMs, sort.direction);
     case "lastAt":
-      return compareNumbers(Number(a.lastAt ?? 0), Number(b.lastAt ?? 0), sort.direction);
+      return compareNumbers(
+        Number(a.lastAt ?? 0),
+        Number(b.lastAt ?? 0),
+        sort.direction,
+      );
     default:
       return 0;
   }
@@ -150,19 +157,29 @@ export function TracingTab(props: Props) {
   );
 
   const providerFavicon = (provider?: string) =>
-    provider === "mistral" ? "https://mistral.ai/favicon.ico" : "https://openai.com/favicon.ico";
+    provider === "mistral"
+      ? "https://mistral.ai/favicon.ico"
+      : "https://openai.com/favicon.ico";
 
-  const providerLabel = (provider?: string) => (provider === "mistral" ? "Mistral" : "OpenAI");
+  const providerLabel = (provider?: string) =>
+    provider === "mistral" ? "Mistral" : "OpenAI";
 
-  const formatTokenChartValue = (value: number | string | undefined) => formatTokenCount(Number(value ?? 0));
-  const formatTooltipValue = (value: any) => formatTokenChartValue(value?.[0] ?? value ?? 0);
-  const formatPieTokenLabel = ({ value }: { value?: number }) => formatTokenChartValue(value);
+  const formatTokenChartValue = (value: number | string | undefined) =>
+    formatTokenCount(Number(value ?? 0));
+  const formatTooltipValue = (value: any) =>
+    formatTokenChartValue(value?.[0] ?? value ?? 0);
+  const formatPieTokenLabel = ({ value }: { value?: number }) =>
+    formatTokenChartValue(value);
 
   const usageCoverage =
     traceUsageStats.totals.requests > 0
-      ? (traceUsageStats.totals.requestsWithUsage / traceUsageStats.totals.requests) * 100
+      ? (traceUsageStats.totals.requestsWithUsage /
+          traceUsageStats.totals.requests) *
+        100
       : 0;
-  const statusEntries = Object.entries(traceUsageStats.totals.statusCounts).sort((a, b) => b[1] - a[1]);
+  const statusEntries = Object.entries(
+    traceUsageStats.totals.statusCounts,
+  ).sort((a, b) => b[1] - a[1]);
   const topAccounts = traceUsageStats.byAccount.slice(0, 6);
   const topRoutes = traceUsageStats.byRoute.slice(0, 6);
   const accountChartData = React.useMemo(
@@ -171,7 +188,7 @@ export function TracingTab(props: Props) {
         accountId: entry.accountId,
         label: sanitized
           ? maskEmail(entry.account.email) || maskId(entry.accountId)
-          : entry.account.email ?? entry.accountId,
+          : (entry.account.email ?? entry.accountId),
         requests: entry.requests,
         tokens: entry.tokens.total,
         costUsd: entry.costUsd,
@@ -182,9 +199,17 @@ export function TracingTab(props: Props) {
     () =>
       [...traceUsageStats.bySession]
         .sort((a, b) => {
-          const primary = compareSessionEntries(a, b, tracingPreferences.topSessionsSort);
+          const primary = compareSessionEntries(
+            a,
+            b,
+            tracingPreferences.topSessionsSort,
+          );
           if (primary !== 0) return primary;
-          const lastSeen = compareNumbers(Number(a.lastAt ?? 0), Number(b.lastAt ?? 0), "desc");
+          const lastSeen = compareNumbers(
+            Number(a.lastAt ?? 0),
+            Number(b.lastAt ?? 0),
+            "desc",
+          );
           if (lastSeen !== 0) return lastSeen;
           return a.sessionId.localeCompare(b.sessionId);
         })
@@ -196,32 +221,54 @@ export function TracingTab(props: Props) {
     () =>
       tracingPreferences.cardOrder.filter((cardId) => {
         if (tracingPreferences.hiddenCards.includes(cardId)) return false;
-        if (tracingPreferences.graphsHidden && GRAPH_CARD_IDS.has(cardId)) return false;
+        if (tracingPreferences.graphsHidden && GRAPH_CARD_IDS.has(cardId))
+          return false;
         return true;
       }),
-    [tracingPreferences.cardOrder, tracingPreferences.graphsHidden, tracingPreferences.hiddenCards],
+    [
+      tracingPreferences.cardOrder,
+      tracingPreferences.graphsHidden,
+      tracingPreferences.hiddenCards,
+    ],
   );
   const hiddenCardIds = React.useMemo(
-    () => tracingPreferences.cardOrder.filter((cardId) => tracingPreferences.hiddenCards.includes(cardId)),
+    () =>
+      tracingPreferences.cardOrder.filter((cardId) =>
+        tracingPreferences.hiddenCards.includes(cardId),
+      ),
     [tracingPreferences.cardOrder, tracingPreferences.hiddenCards],
   );
 
   const layoutChanged =
-    tracingPreferences.cardOrder.some((cardId, index) => cardId !== DEFAULT_TRACING_CARD_ORDER[index]) ||
+    tracingPreferences.cardOrder.some(
+      (cardId, index) => cardId !== DEFAULT_TRACING_CARD_ORDER[index],
+    ) ||
     tracingPreferences.hiddenCards.length > 0 ||
     tracingPreferences.graphsHidden ||
     tracingPreferences.topSessionsSort.key !== DEFAULT_TOP_SESSIONS_SORT.key ||
-    tracingPreferences.topSessionsSort.direction !== DEFAULT_TOP_SESSIONS_SORT.direction;
+    tracingPreferences.topSessionsSort.direction !==
+      DEFAULT_TOP_SESSIONS_SORT.direction;
 
-  const renderCardControls = (cardId: TracingCardId, index: number, extra?: React.ReactNode) => (
+  const renderCardControls = (
+    cardId: TracingCardId,
+    index: number,
+    extra?: React.ReactNode,
+  ) => (
     <div className="inline wrap tracing-card-toolbar">
       {extra}
-      <button className="btn ghost small" onClick={() => toggleTracingCardHidden(cardId)}>
+      <button
+        className="btn ghost small"
+        onClick={() => toggleTracingCardHidden(cardId)}
+      >
         Hide
       </button>
       {layoutEditMode && (
         <>
-          <button className="btn ghost small" onClick={() => moveTracingCard(cardId, -1)} disabled={index === 0}>
+          <button
+            className="btn ghost small"
+            onClick={() => moveTracingCard(cardId, -1)}
+            disabled={index === 0}
+          >
             Earlier
           </button>
           <button
@@ -248,9 +295,30 @@ export function TracingTab(props: Props) {
               <YAxis tickFormatter={formatTokenChartValue} />
               <Tooltip formatter={formatTooltipValue} />
               <Legend />
-              <Line type="monotone" dataKey="tokensInput" name="input" stroke="#1f7a8c" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="tokensOutput" name="output" stroke="#2da4b8" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="tokensTotal" name="total" stroke="#4c956c" strokeWidth={2} dot={false} />
+              <Line
+                type="monotone"
+                dataKey="tokensInput"
+                name="input"
+                stroke="#1f7a8c"
+                strokeWidth={2}
+                dot={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="tokensOutput"
+                name="output"
+                stroke="#2da4b8"
+                strokeWidth={2}
+                dot={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="tokensTotal"
+                name="total"
+                stroke="#4c956c"
+                strokeWidth={2}
+                dot={false}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -263,7 +331,13 @@ export function TracingTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={modelChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
               <YAxis />
               <Tooltip />
               <Legend />
@@ -280,7 +354,13 @@ export function TracingTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={modelCostChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
               <YAxis />
               <Tooltip formatter={(value: any) => usd(Number(value) || 0)} />
               <Legend />
@@ -301,8 +381,22 @@ export function TracingTab(props: Props) {
               <YAxis />
               <Tooltip />
               <Legend />
-              <Line type="monotone" dataKey="errors" name="errors" stroke="#c44545" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="requests" name="requests" stroke="#355070" strokeWidth={2} dot={false} />
+              <Line
+                type="monotone"
+                dataKey="errors"
+                name="errors"
+                stroke="#c44545"
+                strokeWidth={2}
+                dot={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="requests"
+                name="requests"
+                stroke="#355070"
+                strokeWidth={2}
+                dot={false}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -319,7 +413,14 @@ export function TracingTab(props: Props) {
               <YAxis />
               <Tooltip formatter={(value: any) => usd(Number(value) || 0)} />
               <Legend />
-              <Line type="monotone" dataKey="costUsd" name="cost usd" stroke="#4c956c" strokeWidth={2} dot={false} />
+              <Line
+                type="monotone"
+                dataKey="costUsd"
+                name="cost usd"
+                stroke="#4c956c"
+                strokeWidth={2}
+                dot={false}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -337,8 +438,22 @@ export function TracingTab(props: Props) {
               <YAxis />
               <Tooltip />
               <Legend />
-              <Line type="monotone" dataKey="latencyP50Ms" name="p50" stroke="#f4a259" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="latencyP95Ms" name="p95" stroke="#e76f51" strokeWidth={2} dot={false} />
+              <Line
+                type="monotone"
+                dataKey="latencyP50Ms"
+                name="p50"
+                stroke="#f4a259"
+                strokeWidth={2}
+                dot={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="latencyP95Ms"
+                name="p95"
+                stroke="#e76f51"
+                strokeWidth={2}
+                dot={false}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -350,12 +465,23 @@ export function TracingTab(props: Props) {
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
-              <Pie data={modelChartData} dataKey="tokensTotal" nameKey="label" outerRadius={90} label={formatPieTokenLabel}>
+              <Pie
+                data={modelChartData}
+                dataKey="tokensTotal"
+                nameKey="label"
+                outerRadius={90}
+                label={formatPieTokenLabel}
+              >
                 {modelChartData.map((entry, idx) => (
-                  <Cell key={`${entry.label}-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
+                  <Cell
+                    key={`${entry.label}-${idx}`}
+                    fill={CHART_COLORS[idx % CHART_COLORS.length]}
+                  />
                 ))}
               </Pie>
-              <Tooltip formatter={(value: any) => formatTokenChartValue(value)} />
+              <Tooltip
+                formatter={(value: any) => formatTokenChartValue(value)}
+              />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -369,7 +495,13 @@ export function TracingTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={accountChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
               <YAxis />
               <Tooltip />
               <Bar dataKey="requests" name="requests" fill={CHART_COLORS[0]} />
@@ -385,9 +517,21 @@ export function TracingTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={accountChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
-              <YAxis tickFormatter={(value: number) => formatTokenCount(Number(value))} />
-              <Tooltip formatter={(value: number) => formatTokenCount(Number(value))} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
+              <YAxis
+                tickFormatter={(value: number) =>
+                  formatTokenCount(Number(value))
+                }
+              />
+              <Tooltip
+                formatter={(value: number) => formatTokenCount(Number(value))}
+              />
               <Bar dataKey="tokens" name="tokens" fill={CHART_COLORS[1]} />
             </BarChart>
           </ResponsiveContainer>
@@ -401,7 +545,13 @@ export function TracingTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={accountChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
               <YAxis />
               <Tooltip formatter={(value: number) => usd(Number(value) || 0)} />
               <Bar dataKey="costUsd" name="cost usd" fill={CHART_COLORS[2]} />
@@ -429,7 +579,7 @@ export function TracingTab(props: Props) {
               {topAccounts.map((entry) => {
                 const accountLabel = sanitized
                   ? maskEmail(entry.account.email) || maskId(entry.accountId)
-                  : entry.account.email ?? entry.accountId;
+                  : (entry.account.email ?? entry.accountId);
                 return (
                   <tr key={entry.accountId}>
                     <td className="mono">{accountLabel}</td>
@@ -443,7 +593,9 @@ export function TracingTab(props: Props) {
               })}
               {!topAccounts.length && (
                 <tr>
-                  <td colSpan={6} className="muted">No account usage in this range.</td>
+                  <td colSpan={6} className="muted">
+                    No account usage in this range.
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -479,7 +631,9 @@ export function TracingTab(props: Props) {
               ))}
               {!topRoutes.length && (
                 <tr>
-                  <td colSpan={6} className="muted">No route usage in this range.</td>
+                  <td colSpan={6} className="muted">
+                    No route usage in this range.
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -511,11 +665,16 @@ export function TracingTab(props: Props) {
             onClick={() =>
               setTopSessionsSort({
                 ...tracingPreferences.topSessionsSort,
-                direction: tracingPreferences.topSessionsSort.direction === "desc" ? "asc" : "desc",
+                direction:
+                  tracingPreferences.topSessionsSort.direction === "desc"
+                    ? "asc"
+                    : "desc",
               })
             }
           >
-            {tracingPreferences.topSessionsSort.direction === "desc" ? "Desc" : "Asc"}
+            {tracingPreferences.topSessionsSort.direction === "desc"
+              ? "Desc"
+              : "Asc"}
           </button>
         </>
       ),
@@ -537,7 +696,9 @@ export function TracingTab(props: Props) {
               <tbody>
                 {topSessions.map((entry) => (
                   <tr key={entry.sessionId}>
-                    <td className="mono">{formatSessionTail(entry.sessionId)}</td>
+                    <td className="mono">
+                      {formatSessionTail(entry.sessionId)}
+                    </td>
                     <td>{entry.requests}</td>
                     <td>{formatTokenCount(entry.tokens.total)}</td>
                     <td className="mono">{usd(entry.costUsd)}</td>
@@ -547,7 +708,9 @@ export function TracingTab(props: Props) {
                 ))}
                 {!topSessions.length && (
                   <tr>
-                    <td colSpan={6} className="muted">No session-tagged traces in this range.</td>
+                    <td colSpan={6} className="muted">
+                      No session-tagged traces in this range.
+                    </td>
                   </tr>
                 )}
               </tbody>
@@ -563,39 +726,71 @@ export function TracingTab(props: Props) {
       <section className="grid cards5">
         <Metric title="Requests" value={`${traceStats.totals.requests}`} />
         <Metric title="Error rate" value={pct(traceStats.totals.errorRate)} />
-        <Metric title="Total tokens" value={formatTokenCount(traceStats.totals.tokensTotal)} />
+        <Metric
+          title="Total tokens"
+          value={formatTokenCount(traceStats.totals.tokensTotal)}
+        />
         <Metric title="Total cost" value={usd(traceStats.totals.costUsd)} />
-        <Metric title="Avg latency" value={`${Math.round(traceStats.totals.latencyAvgMs)}ms`} />
+        <Metric
+          title="Avg latency"
+          value={`${Math.round(traceStats.totals.latencyAvgMs)}ms`}
+        />
       </section>
 
       <section className="grid cards5">
-        <Metric title="Success rate" value={`${traceUsageStats.totals.successRate.toFixed(1)}%`} />
-        <Metric title="Stream share" value={`${traceUsageStats.totals.streamingRate.toFixed(1)}%`} />
+        <Metric
+          title="Success rate"
+          value={`${traceUsageStats.totals.successRate.toFixed(1)}%`}
+        />
+        <Metric
+          title="Stream share"
+          value={`${traceUsageStats.totals.streamingRate.toFixed(1)}%`}
+        />
         <Metric title="Usage captured" value={`${usageCoverage.toFixed(1)}%`} />
-        <Metric title="Active sessions" value={`${traceUsageStats.bySession.length}`} />
-        <Metric title="Active accounts" value={`${traceUsageStats.byAccount.length}`} />
+        <Metric
+          title="Active sessions"
+          value={`${traceUsageStats.bySession.length}`}
+        />
+        <Metric
+          title="Active accounts"
+          value={`${traceUsageStats.byAccount.length}`}
+        />
       </section>
 
       <section className="tracing-layout-actions">
         <div>
           <p className="muted">Tracing range and layout are saved globally.</p>
           <div className="inline wrap">
-            <select value={traceRange} onChange={(e) => setTraceRange(e.target.value as TraceRangePreset)}>
+            <select
+              value={traceRange}
+              onChange={(e) =>
+                setTraceRange(e.target.value as TraceRangePreset)
+              }
+            >
               <option value="24h">Last 24h</option>
               <option value="7d">Last 7d</option>
               <option value="30d">Last 30d</option>
               <option value="all">All time</option>
             </select>
-            <button className="btn ghost" onClick={() => setLayoutEditMode((current) => !current)}>
+            <button
+              className="btn ghost"
+              onClick={() => setLayoutEditMode((current) => !current)}
+            >
               {layoutEditMode ? "Done editing" : "Edit layout"}
             </button>
             <button
               className="btn ghost"
-              onClick={() => setTracingGraphsHidden(!tracingPreferences.graphsHidden)}
+              onClick={() =>
+                setTracingGraphsHidden(!tracingPreferences.graphsHidden)
+              }
             >
               {tracingPreferences.graphsHidden ? "Show graphs" : "Hide graphs"}
             </button>
-            <button className="btn secondary" onClick={resetTracingLayout} disabled={!layoutChanged}>
+            <button
+              className="btn secondary"
+              onClick={resetTracingLayout}
+              disabled={!layoutChanged}
+            >
               Reset layout
             </button>
           </div>
@@ -607,12 +802,18 @@ export function TracingTab(props: Props) {
           <div className="inline wrap">
             <span className="muted">Hidden cards:</span>
             {hiddenCardIds.map((cardId) => (
-              <button key={cardId} className="btn ghost small" onClick={() => toggleTracingCardHidden(cardId)}>
+              <button
+                key={cardId}
+                className="btn ghost small"
+                onClick={() => toggleTracingCardHidden(cardId)}
+              >
                 Show {cards[cardId].title}
               </button>
             ))}
             {tracingPreferences.graphsHidden && (
-              <span className="muted">Graph cards are currently hidden by the global graph toggle.</span>
+              <span className="muted">
+                Graph cards are currently hidden by the global graph toggle.
+              </span>
             )}
           </div>
         </section>
@@ -622,7 +823,10 @@ export function TracingTab(props: Props) {
         {visibleCardIds.map((cardId, index) => {
           const card = cards[cardId];
           return (
-            <section key={cardId} className={`panel tracing-card${card.fullSpan ? " full-span" : ""}`}>
+            <section
+              key={cardId}
+              className={`panel tracing-card${card.fullSpan ? " full-span" : ""}`}
+            >
               <div className="tracing-card-head">
                 <h2>{card.title}</h2>
                 {renderCardControls(cardId, index, card.toolbar)}
@@ -637,12 +841,30 @@ export function TracingTab(props: Props) {
         <div className="trace-head">
           <h2>Request tracing</h2>
           <div className="inline wrap">
-            <button className="btn ghost" onClick={() => void gotoTracePage(tracePagination.page - 1)} disabled={!tracePagination.hasPrev}>Previous</button>
+            <button
+              className="btn ghost"
+              onClick={() => void gotoTracePage(tracePagination.page - 1)}
+              disabled={!tracePagination.hasPrev}
+            >
+              Previous
+            </button>
             <span className="mono">
-              Page {tracePagination.page} / {tracePagination.totalPages} ({tracePagination.total} traces, {tracePagination.pageSize} per page)
+              Page {tracePagination.page} / {tracePagination.totalPages} (
+              {tracePagination.total} traces, {tracePagination.pageSize} per
+              page)
             </span>
-            <button className="btn ghost" onClick={() => void gotoTracePage(tracePagination.page + 1)} disabled={!tracePagination.hasNext}>Next</button>
-            <button className="btn secondary" onClick={() => void exportTracesZip()} disabled={exportInProgress}>
+            <button
+              className="btn ghost"
+              onClick={() => void gotoTracePage(tracePagination.page + 1)}
+              disabled={!tracePagination.hasNext}
+            >
+              Next
+            </button>
+            <button
+              className="btn secondary"
+              onClick={() => void exportTracesZip()}
+              disabled={exportInProgress}
+            >
               {exportInProgress ? "Exporting..." : "Export all (.zip)"}
             </button>
           </div>
@@ -660,10 +882,14 @@ export function TracingTab(props: Props) {
                 </span>
               );
             })}
-            {!statusEntries.length && <span className="chip mono">No traces</span>}
+            {!statusEntries.length && (
+              <span className="chip mono">No traces</span>
+            )}
           </div>
           <p className="muted">
-            Matched {traceUsageStats.tracesMatched} of {traceUsageStats.tracesEvaluated} retained traces in the selected range.
+            Matched {traceUsageStats.tracesMatched} of{" "}
+            {traceUsageStats.tracesEvaluated} retained traces in the selected
+            range.
           </p>
         </div>
         <div className="table-wrap">
@@ -688,15 +914,24 @@ export function TracingTab(props: Props) {
                 const rowCost =
                   typeof trace.costUsd === "number"
                     ? trace.costUsd
-                    : (estimateCostUsd(trace.model, trace.tokensInput ?? 0, trace.tokensOutput ?? 0) ?? 0);
-                const provider = trace.accountId ? accountProviderById.get(trace.accountId) : undefined;
+                    : (estimateCostUsd(
+                        trace.model,
+                        trace.tokensInput ?? 0,
+                        trace.tokensOutput ?? 0,
+                      ) ?? 0);
+                const provider = trace.accountId
+                  ? accountProviderById.get(trace.accountId)
+                  : undefined;
                 const accountLabel = sanitized
                   ? maskEmail(trace.accountEmail) || maskId(trace.accountId)
-                  : trace.accountEmail ?? trace.accountId ?? "-";
+                  : (trace.accountEmail ?? trace.accountId ?? "-");
                 const sessionLabel = formatSessionTail(trace.sessionId);
                 return (
                   <React.Fragment key={trace.id}>
-                    <tr onClick={() => void toggleExpandedTrace(trace.id)} className="trace-row">
+                    <tr
+                      onClick={() => void toggleExpandedTrace(trace.id)}
+                      className="trace-row"
+                    >
                       <td>{fmt(trace.at)}</td>
                       <td className="mono">{sessionLabel || "-"}</td>
                       <td className="mono">{routeLabel(trace.route)}</td>
@@ -719,29 +954,53 @@ export function TracingTab(props: Props) {
                       </td>
                       <td>{trace.status}</td>
                       <td>{trace.latencyMs}ms</td>
-                      <td>{typeof (trace.tokensTotal ?? trace.usage?.total_tokens) === "number" ? formatTokenCount(trace.tokensTotal ?? trace.usage?.total_tokens) : "-"}</td>
+                      <td>
+                        {typeof (
+                          trace.tokensTotal ?? trace.usage?.total_tokens
+                        ) === "number"
+                          ? formatTokenCount(
+                              trace.tokensTotal ?? trace.usage?.total_tokens,
+                            )
+                          : "-"}
+                      </td>
                       <td className="mono">{usd(rowCost)}</td>
-                      <td className="mono">{trace.error?.slice(0, 60) ?? "-"}</td>
+                      <td className="mono">
+                        {trace.error?.slice(0, 60) ?? "-"}
+                      </td>
                     </tr>
                     {isExpanded && (
                       <tr>
                         <td colSpan={10}>
                           <div className="expanded-trace">
-                            {expandedTraceLoading && <div className="muted">Loading trace details...</div>}
-                            {!expandedTraceLoading && expandedTrace && expandedTrace.id === trace.id && (
-                              <>
-                                {expandedTrace.hasRequestBody && (
-                                  <details open>
-                                    <summary>Request Body</summary>
-                                    <pre className="mono pre">{JSON.stringify(expandedTrace.requestBody, null, 2)}</pre>
-                                  </details>
-                                )}
-                                <details>
-                                  <summary>Full Trace Object</summary>
-                                  <pre className="mono pre">{JSON.stringify(expandedTrace, null, 2)}</pre>
-                                </details>
-                              </>
+                            {expandedTraceLoading && (
+                              <div className="muted">
+                                Loading trace details...
+                              </div>
                             )}
+                            {!expandedTraceLoading &&
+                              expandedTrace &&
+                              expandedTrace.id === trace.id && (
+                                <>
+                                  {expandedTrace.hasRequestBody && (
+                                    <details open>
+                                      <summary>Request Body</summary>
+                                      <pre className="mono pre">
+                                        {JSON.stringify(
+                                          expandedTrace.requestBody,
+                                          null,
+                                          2,
+                                        )}
+                                      </pre>
+                                    </details>
+                                  )}
+                                  <details>
+                                    <summary>Full Trace Object</summary>
+                                    <pre className="mono pre">
+                                      {JSON.stringify(expandedTrace, null, 2)}
+                                    </pre>
+                                  </details>
+                                </>
+                              )}
                           </div>
                         </td>
                       </tr>

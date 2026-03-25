@@ -1,0 +1,11 @@
+data
+dist
+web-dist
+node_modules
+web/node_modules
+.worktrees
+coverage
+docs
+README.md
+package-lock.json
+web/package-lock.json

@@ -1,4 +1,9 @@
 export type ProviderId = "openai" | "mistral";
+export type QuotaProfile = "auto" | "weekly_only" | "windowed_and_weekly";
+export type ProxyRoutingMode = "quota_aware" | "round_robin";
+export type ProxySettings = {
+  routingMode: ProxyRoutingMode;
+};
 
 export type DashboardRangePreset = "24h" | "7d" | "30d" | "all";
 
@@ -73,6 +78,7 @@ export type UsageSnapshot = {
   primary?: UsageWindow; // ~5h window
   secondary?: UsageWindow; // weekly window
   fetchedAt: number;
+  profile?: Exclude<QuotaProfile, "auto">;
   scope?: "account" | "unscoped" | "unsupported";
   degradedReason?: string;
 };
@@ -106,6 +112,7 @@ export type Account = {
   id: string;
   provider?: ProviderId;
   email?: string;
+  quotaProfile?: QuotaProfile;
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
@@ -127,6 +134,7 @@ export type StoreFile = {
   accounts: Account[];
   modelAliases?: ModelAlias[];
   dashboardPreferences?: DashboardPreferences;
+  proxySettings?: ProxySettings;
 };
 
 export type OAuthFlowState = {

@@ -5,7 +5,10 @@ import { createTempDir, startRuntime, writeJson } from "./helpers.js";
 
 test("admin account endpoints reject unknown fields", async () => {
   const tmp = await createTempDir();
-  await writeJson(path.join(tmp, "accounts.json"), { accounts: [], modelAliases: [] });
+  await writeJson(path.join(tmp, "accounts.json"), {
+    accounts: [],
+    modelAliases: [],
+  });
   await writeJson(path.join(tmp, "oauth-state.json"), { states: [] });
   const runtime = await startRuntime({
     storePath: path.join(tmp, "accounts.json"),

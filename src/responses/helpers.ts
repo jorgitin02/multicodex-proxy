@@ -71,7 +71,9 @@ export function isVisibleAssistantContentPart(part: any): boolean {
 }
 
 export function clampReasoningEffort(modelId: string, effort: string): string {
-  const id = modelId.includes("/") ? modelId.split("/").pop() || modelId : modelId;
+  const id = modelId.includes("/")
+    ? modelId.split("/").pop() || modelId
+    : modelId;
   if (
     (id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3")) &&
     effort === "minimal"
@@ -83,7 +85,10 @@ export function clampReasoningEffort(modelId: string, effort: string): string {
   return effort;
 }
 
-export function toUpstreamInputContent(content: any, role: "user" | "assistant") {
+export function toUpstreamInputContent(
+  content: any,
+  role: "user" | "assistant",
+) {
   const textType = role === "assistant" ? "output_text" : "input_text";
   if (typeof content === "string") return [{ type: textType, text: content }];
   if (Array.isArray(content)) {
@@ -99,7 +104,9 @@ export function toUpstreamInputContent(content: any, role: "user" | "assistant")
         out.push({ type: textType, text: part.text });
       }
     }
-    return out.length ? out : [{ type: textType, text: JSON.stringify(content) }];
+    return out.length
+      ? out
+      : [{ type: textType, text: JSON.stringify(content) }];
   }
   return [{ type: textType, text: String(content ?? "") }];
 }

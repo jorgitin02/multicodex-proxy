@@ -1,5 +1,6 @@
 import express from "express";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import { createProxyRouter } from "./routes/proxy/index.js";
 import { createOAuthCallbackServer } from "./oauth-callback-server.js";
 import { oauthConfig as defaultOAuthConfig } from "./oauth-config.js";
 import type { OAuthConfig } from "./oauth.js";
+import { logger } from "./logger.js";
 import {
   ADMIN_TOKEN,
   CHATGPT_BASE_URL,
@@ -28,7 +30,6 @@ import {
   STORE_PATH,
   TRACE_FILE_PATH,
   TRACE_STATS_HISTORY_PATH,
-  UPSTREAM_PATH,
 } from "./config.js";
 
 type RuntimeOptions = {
@@ -51,11 +52,7 @@ type RuntimeOptions = {
 };
 
 function isLoopbackHost(host: string): boolean {
-  return (
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "localhost"
-  );
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
 export async function createRuntime(options: RuntimeOptions = {}) {
@@ -86,7 +83,33 @@ export async function createRuntime(options: RuntimeOptions = {}) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "20mb" }));
-  const oauthCallbackServer = createOAuthCallbackServer(oauthConfig.redirectUri);
+  app.use((req, res, next) => {
+    const requestId = req.header("x-request-id")?.trim() || randomUUID();
+    req.headers["x-request-id"] = requestId;
+    res.locals.requestId = requestId;
+    res.setHeader("x-request-id", requestId);
+    next();
+  });
+  app.use((req, res, next) => {
+    const startedAt = Date.now();
+    res.on("finish", () => {
+      if (req.path === "/health" || req.path === "/ready") return;
+      logger.info(
+        {
+          requestId: res.locals.requestId,
+          method: req.method,
+          path: req.path,
+          statusCode: res.statusCode,
+          latencyMs: Date.now() - startedAt,
+        },
+        "http_request",
+      );
+    });
+    next();
+  });
+  const oauthCallbackServer = createOAuthCallbackServer(
+    oauthConfig.redirectUri,
+  );
 
   const store = new AccountStore(storePath, encryptionKey || undefined);
   const oauthStore = new OAuthStateStore(
@@ -190,7 +213,7 @@ export async function createRuntime(options: RuntimeOptions = {}) {
       res: express.Response,
       _next: express.NextFunction,
     ) => {
-      console.error(err);
+      logger.error({ err, requestId: res.locals.requestId }, "request_error");
       if (res.headersSent) return;
       res.status(500).json({ error: "internal server error" });
     },
@@ -233,7 +256,9 @@ export async function createRuntime(options: RuntimeOptions = {}) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       if (oauthCallbackServer) {
         oauthCallbackServer.closeAllConnections?.();
-        await new Promise<void>((resolve) => oauthCallbackServer.close(() => resolve()));
+        await new Promise<void>((resolve) =>
+          oauthCallbackServer.close(() => resolve()),
+        );
       }
       throw err;
     }
@@ -274,7 +299,7 @@ export async function createRuntime(options: RuntimeOptions = {}) {
     const handleSignal = () => {
       shutdown()
         .catch((err) => {
-          console.error(err);
+          logger.error({ err }, "shutdown_error");
         })
         .finally(() => {
           process.exit(0);

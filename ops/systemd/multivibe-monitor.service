@@ -1,0 +1,9 @@
+[Unit]
+Description=MultiVibe health monitor
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/multivibe
+Environment=MONITOR_TARGET_URL=http://127.0.0.1:4010/health
+ExecStart=/usr/bin/npm run monitor:health

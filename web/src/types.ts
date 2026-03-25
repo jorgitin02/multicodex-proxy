@@ -3,6 +3,7 @@ export type Account = {
   provider?: "openai" | "mistral";
   email?: string;
   enabled: boolean;
+  quotaProfile?: "auto" | "weekly_only" | "windowed_and_weekly";
   accessToken?: string;
   refreshToken?: string;
   chatgptAccountId?: string;
@@ -17,10 +18,15 @@ export type Account = {
       usedPercent?: number;
       resetAt?: number;
     };
+    profile?: "weekly_only" | "windowed_and_weekly";
     scope?: "account" | "unscoped" | "unsupported";
     degradedReason?: string;
   };
   state?: any;
+};
+
+export type ProxySettings = {
+  routingMode: "quota_aware" | "round_robin";
 };
 
 export type Trace = {

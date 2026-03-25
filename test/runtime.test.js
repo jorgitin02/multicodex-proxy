@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { createTempDir, getAvailablePort, startRuntime, writeJson } from "./helpers.js";
+import {
+  createTempDir,
+  getAvailablePort,
+  startRuntime,
+  writeJson,
+} from "./helpers.js";
 
 test("runtime refuses non-loopback binding without admin auth", async () => {
   const { createRuntime } = await import("../dist/runtime.js");
@@ -29,7 +34,10 @@ test("runtime refuses non-loopback binding without admin auth", async () => {
 
 test("runtime exposes readiness separately from health", async () => {
   const tmp = await createTempDir();
-  await writeJson(path.join(tmp, "accounts.json"), { accounts: [], modelAliases: [] });
+  await writeJson(path.join(tmp, "accounts.json"), {
+    accounts: [],
+    modelAliases: [],
+  });
   await writeJson(path.join(tmp, "oauth-state.json"), { states: [] });
   const runtime = await startRuntime({
     adminToken: "test-admin",
@@ -40,7 +48,9 @@ test("runtime exposes readiness separately from health", async () => {
   });
 
   try {
-    const health = await fetch(`${runtime.baseUrl}/health`).then((r) => r.json());
+    const health = await fetch(`${runtime.baseUrl}/health`).then((r) =>
+      r.json(),
+    );
     const ready = await fetch(`${runtime.baseUrl}/ready`).then((r) => ({
       status: r.status,
       body: r.status === 200 ? r.json() : r.text(),
@@ -56,7 +66,10 @@ test("runtime exposes readiness separately from health", async () => {
 
 test("runtime serves the loopback OAuth callback helper page", async () => {
   const tmp = await createTempDir();
-  await writeJson(path.join(tmp, "accounts.json"), { accounts: [], modelAliases: [] });
+  await writeJson(path.join(tmp, "accounts.json"), {
+    accounts: [],
+    modelAliases: [],
+  });
   await writeJson(path.join(tmp, "oauth-state.json"), { states: [] });
   const callbackPort = await getAvailablePort();
   const runtime = await startRuntime({
@@ -84,6 +97,32 @@ test("runtime serves the loopback OAuth callback helper page", async () => {
     assert.match(body, /OAuth callback received/);
     assert.match(body, /multivibe-oauth-callback/);
     assert.match(body, /Copy callback URL/);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("runtime attaches an x-request-id header to responses", async () => {
+  const tmp = await createTempDir();
+  await writeJson(path.join(tmp, "accounts.json"), {
+    accounts: [],
+    modelAliases: [],
+  });
+  await writeJson(path.join(tmp, "oauth-state.json"), { states: [] });
+  const runtime = await startRuntime({
+    adminToken: "test-admin",
+    storePath: path.join(tmp, "accounts.json"),
+    oauthStatePath: path.join(tmp, "oauth-state.json"),
+    traceFilePath: path.join(tmp, "traces.jsonl"),
+    traceStatsHistoryPath: path.join(tmp, "traces-history.jsonl"),
+  });
+
+  try {
+    const res = await fetch(`${runtime.baseUrl}/health`);
+    const requestId = res.headers.get("x-request-id");
+
+    assert.equal(typeof requestId, "string");
+    assert.match(requestId ?? "", /^[a-f0-9-]{8,}$/i);
   } finally {
     await runtime.close();
   }

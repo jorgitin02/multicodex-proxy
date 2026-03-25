@@ -21,6 +21,7 @@ import {
 import type {
   Account,
   AccountsSectionId,
+  ProxySettings,
   TraceRangePreset,
   TraceStats,
   TraceUsageStats,
@@ -45,7 +46,10 @@ type Props = {
     sectionOrder: AccountsSectionId[];
     hiddenSections: AccountsSectionId[];
   };
-  moveAccountsSection: (sectionId: AccountsSectionId, direction: -1 | 1) => void;
+  moveAccountsSection: (
+    sectionId: AccountsSectionId,
+    direction: -1 | 1,
+  ) => void;
   toggleAccountsSectionHidden: (sectionId: AccountsSectionId) => void;
   resetAccountsLayout: () => void;
   accounts: Account[];
@@ -55,6 +59,8 @@ type Props = {
   unblock: (id: string) => Promise<void>;
   refreshUsage: (id: string) => Promise<void>;
   createAccount: (body: any) => Promise<void>;
+  proxySettings: ProxySettings;
+  patchProxySettings: (body: Partial<ProxySettings>) => Promise<void>;
   startOAuth: (email: string, accountId?: string) => Promise<any>;
   completeOAuth: (flowId: string, input: string) => Promise<any>;
   oauthRedirectUri: string;
@@ -68,6 +74,7 @@ type EditAccountState = {
   refreshToken: string;
   chatgptAccountId: string;
   priority: string;
+  quotaProfile: "auto" | "weekly_only" | "windowed_and_weekly";
   enabled: boolean;
 };
 
@@ -82,6 +89,7 @@ type OAuthDialogState = {
   accountId?: string;
   pendingPriority?: number;
   pendingEnabled?: boolean;
+  pendingQuotaProfile?: "auto" | "weekly_only" | "windowed_and_weekly";
 };
 
 function sectionLabel(sectionId: AccountsSectionId) {
@@ -117,6 +125,8 @@ export function AccountsTab(props: Props) {
     unblock,
     refreshUsage,
     createAccount,
+    proxySettings,
+    patchProxySettings,
     startOAuth,
     completeOAuth,
     oauthRedirectUri,
@@ -127,9 +137,14 @@ export function AccountsTab(props: Props) {
   const [manualAccessToken, setManualAccessToken] = useState("");
   const [manualRefreshToken, setManualRefreshToken] = useState("");
   const [manualPriority, setManualPriority] = useState("0");
+  const [manualQuotaProfile, setManualQuotaProfile] = useState<
+    "auto" | "weekly_only" | "windowed_and_weekly"
+  >("auto");
   const [manualEnabled, setManualEnabled] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<EditAccountState | null>(null);
+  const [editingAccount, setEditingAccount] = useState<EditAccountState | null>(
+    null,
+  );
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [oauthBusyId, setOauthBusyId] = useState<string | null>(null);
   const [oauthDialog, setOauthDialog] = useState<OAuthDialogState | null>(null);
@@ -141,14 +156,18 @@ export function AccountsTab(props: Props) {
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
       if (!data || typeof data !== "object") return;
-      if ((data as { type?: string }).type !== "multivibe-oauth-callback") return;
+      if ((data as { type?: string }).type !== "multivibe-oauth-callback")
+        return;
       const callbackUrl = (data as { callbackUrl?: string }).callbackUrl;
       if (typeof callbackUrl !== "string" || !callbackUrl.trim()) return;
 
       try {
         const received = new URL(callbackUrl);
         const expected = new URL(oauthDialog.expectedRedirectUri);
-        if (received.origin !== expected.origin || received.pathname !== expected.pathname) {
+        if (
+          received.origin !== expected.origin ||
+          received.pathname !== expected.pathname
+        ) {
           return;
         }
       } catch {
@@ -170,7 +189,7 @@ export function AccountsTab(props: Props) {
         id: entry.accountId,
         label: sanitized
           ? maskEmail(entry.account.email) || maskId(entry.accountId)
-          : entry.account.email ?? entry.accountId,
+          : (entry.account.email ?? entry.accountId),
         requests: entry.requests,
         tokens: entry.tokens.total,
         costUsd: entry.costUsd,
@@ -179,8 +198,9 @@ export function AccountsTab(props: Props) {
   );
 
   const layoutChanged =
-    accountsPreferences.sectionOrder.some((sectionId, index) => sectionId !== DEFAULT_ACCOUNTS_SECTION_ORDER[index]) ||
-    accountsPreferences.hiddenSections.length > 0;
+    accountsPreferences.sectionOrder.some(
+      (sectionId, index) => sectionId !== DEFAULT_ACCOUNTS_SECTION_ORDER[index],
+    ) || accountsPreferences.hiddenSections.length > 0;
 
   const closeModal = () => {
     setShowAddAccount(false);
@@ -189,6 +209,7 @@ export function AccountsTab(props: Props) {
     setManualAccessToken("");
     setManualRefreshToken("");
     setManualPriority("0");
+    setManualQuotaProfile("auto");
     setManualEnabled(true);
     setIsSubmitting(false);
   };
@@ -211,7 +232,8 @@ export function AccountsTab(props: Props) {
         const authorizeUrl = result?.authorizeUrl as string | undefined;
         const flowId = result?.flowId as string | undefined;
         const expectedRedirectUri =
-          (result?.expectedRedirectUri as string | undefined) || oauthRedirectUri;
+          (result?.expectedRedirectUri as string | undefined) ||
+          oauthRedirectUri;
         if (!authorizeUrl || !flowId) {
           throw new Error("Missing OAuth flow details from start response");
         }
@@ -225,6 +247,7 @@ export function AccountsTab(props: Props) {
           mode: "create",
           pendingPriority: Number(manualPriority) || 0,
           pendingEnabled: manualEnabled,
+          pendingQuotaProfile: manualQuotaProfile,
         });
         window.open(authorizeUrl, "_blank", "noopener,noreferrer");
       } finally {
@@ -242,6 +265,7 @@ export function AccountsTab(props: Props) {
         accessToken: manualAccessToken.trim(),
         refreshToken: manualRefreshToken.trim() || undefined,
         priority: Number(manualPriority) || 0,
+        quotaProfile: manualQuotaProfile,
         enabled: manualEnabled,
       });
       closeModal();
@@ -259,6 +283,7 @@ export function AccountsTab(props: Props) {
       refreshToken: account.refreshToken ?? "",
       chatgptAccountId: account.chatgptAccountId ?? "",
       priority: String(account.priority ?? 0),
+      quotaProfile: account.quotaProfile ?? "auto",
       enabled: account.enabled,
     });
   };
@@ -269,7 +294,10 @@ export function AccountsTab(props: Props) {
     if (!editingAccount.email.trim()) return;
     setIsSavingEdit(true);
     try {
-      const result = await startOAuth(editingAccount.email.trim(), editingAccount.id);
+      const result = await startOAuth(
+        editingAccount.email.trim(),
+        editingAccount.id,
+      );
       const authorizeUrl = result?.authorizeUrl as string | undefined;
       const flowId = result?.flowId as string | undefined;
       const expectedRedirectUri =
@@ -303,6 +331,7 @@ export function AccountsTab(props: Props) {
         email: editingAccount.email.trim() || undefined,
         chatgptAccountId: editingAccount.chatgptAccountId.trim() || undefined,
         priority: Number(editingAccount.priority) || 0,
+        quotaProfile: editingAccount.quotaProfile,
         enabled: editingAccount.enabled,
       });
       closeEditModal();
@@ -323,6 +352,7 @@ export function AccountsTab(props: Props) {
         refreshToken: editingAccount.refreshToken.trim() || undefined,
         chatgptAccountId: editingAccount.chatgptAccountId.trim() || undefined,
         priority: Number(editingAccount.priority) || 0,
+        quotaProfile: editingAccount.quotaProfile,
         enabled: editingAccount.enabled,
       });
       closeEditModal();
@@ -338,15 +368,23 @@ export function AccountsTab(props: Props) {
       setOauthDialog((current) =>
         current ? { ...current, isSubmitting: true } : current,
       );
-      const result = await completeOAuth(oauthDialog.flowId, oauthDialog.callbackInput.trim());
-      const accountId = String(result?.account?.id ?? oauthDialog.accountId ?? "").trim();
+      const result = await completeOAuth(
+        oauthDialog.flowId,
+        oauthDialog.callbackInput.trim(),
+      );
+      const accountId = String(
+        result?.account?.id ?? oauthDialog.accountId ?? "",
+      ).trim();
       if (
         oauthDialog.mode === "create" &&
         accountId &&
-        (oauthDialog.pendingPriority !== 0 || oauthDialog.pendingEnabled === false)
+        (oauthDialog.pendingPriority !== 0 ||
+          oauthDialog.pendingEnabled === false ||
+          oauthDialog.pendingQuotaProfile !== "auto")
       ) {
         await patch(accountId, {
           priority: oauthDialog.pendingPriority ?? 0,
+          quotaProfile: oauthDialog.pendingQuotaProfile ?? "auto",
           enabled: oauthDialog.pendingEnabled ?? true,
         });
       }
@@ -363,7 +401,9 @@ export function AccountsTab(props: Props) {
   const reauthAccount = async (account: Account) => {
     if ((account.provider ?? "openai") !== "openai") return;
     if (!account.email?.trim()) {
-      window.alert("This OpenAI account has no email, so reauth cannot be started.");
+      window.alert(
+        "This OpenAI account has no email, so reauth cannot be started.",
+      );
       return;
     }
     setOauthBusyId(account.id);
@@ -393,18 +433,38 @@ export function AccountsTab(props: Props) {
   };
 
   const providerFavicon = (provider?: string) =>
-    provider === "mistral" ? "https://mistral.ai/favicon.ico" : "https://openai.com/favicon.ico";
+    provider === "mistral"
+      ? "https://mistral.ai/favicon.ico"
+      : "https://openai.com/favicon.ico";
 
-  const providerLabel = (provider?: string) => (provider === "mistral" ? "Mistral" : "OpenAI");
+  const providerLabel = (provider?: string) =>
+    provider === "mistral" ? "Mistral" : "OpenAI";
+
+  const effectiveQuotaProfile = (account: Account) =>
+    account.quotaProfile && account.quotaProfile !== "auto"
+      ? account.quotaProfile
+      : (account.usage?.profile ?? "windowed_and_weekly");
+
+  const quotaProfileLabel = (account: Account) => {
+    const profile = effectiveQuotaProfile(account);
+    if (profile === "weekly_only") return "Weekly only";
+    return "5h + week";
+  };
 
   const quotaStatus = (account: Account) => {
-    if (account.usage?.scope === "unscoped") return account.usage.degradedReason ?? "Needs ChatGPT account ID";
-    if (account.usage?.scope === "unsupported") return account.usage.degradedReason ?? "Provider quota unsupported";
-    if (account.usage?.scope === "account") return "Account-scoped snapshot";
+    if (account.usage?.scope === "unscoped")
+      return account.usage.degradedReason ?? "Needs ChatGPT account ID";
+    if (account.usage?.scope === "unsupported")
+      return account.usage.degradedReason ?? "Provider quota unsupported";
+    if (account.usage?.scope === "account")
+      return `${quotaProfileLabel(account)} snapshot`;
     return "No provider snapshot yet";
   };
 
-  const sections: Record<AccountsSectionId, { title: string; render: () => React.ReactNode }> = {
+  const sections: Record<
+    AccountsSectionId,
+    { title: string; render: () => React.ReactNode }
+  > = {
     requestsByAccount: {
       title: "Requests by account",
       render: () => (
@@ -412,7 +472,13 @@ export function AccountsTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={accountChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
               <YAxis />
               <Tooltip />
               <Bar dataKey="requests" name="requests" fill={CHART_COLORS[0]} />
@@ -428,9 +494,21 @@ export function AccountsTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={accountChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
-              <YAxis tickFormatter={(value: number) => formatTokenCount(Number(value))} />
-              <Tooltip formatter={(value: number) => formatTokenCount(Number(value))} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
+              <YAxis
+                tickFormatter={(value: number) =>
+                  formatTokenCount(Number(value))
+                }
+              />
+              <Tooltip
+                formatter={(value: number) => formatTokenCount(Number(value))}
+              />
               <Bar dataKey="tokens" name="tokens" fill={CHART_COLORS[1]} />
             </BarChart>
           </ResponsiveContainer>
@@ -444,7 +522,13 @@ export function AccountsTab(props: Props) {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={accountChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d6dde4" />
-              <XAxis dataKey="label" interval={0} angle={-15} textAnchor="end" height={56} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                angle={-15}
+                textAnchor="end"
+                height={56}
+              />
               <YAxis />
               <Tooltip formatter={(value: number) => usd(Number(value) || 0)} />
               <Bar dataKey="costUsd" name="cost usd" fill={CHART_COLORS[2]} />
@@ -457,10 +541,15 @@ export function AccountsTab(props: Props) {
       title: "Live provider quota snapshots",
       render: () => (
         <>
-          <p className="muted">Provider quota windows are live snapshots and do not follow the selected trace range.</p>
+          <p className="muted">
+            Provider quota windows are live snapshots and do not follow the
+            selected trace range.
+          </p>
           <ul className="clean-list">
             <li>Last refresh: {fmt(providerQuotaStats.freshestAt)}</li>
-            <li>Account-scoped snapshots: {providerQuotaStats.accountScoped}</li>
+            <li>
+              Account-scoped snapshots: {providerQuotaStats.accountScoped}
+            </li>
             <li>Needs account ID repair: {providerQuotaStats.degraded}</li>
             <li>Provider unsupported: {providerQuotaStats.unsupported}</li>
           </ul>
@@ -477,9 +566,14 @@ export function AccountsTab(props: Props) {
         <div className="inline wrap row-between">
           <div>
             <h2>Accounts range</h2>
-            <p className="muted">Charts below use retained trace history for the selected window.</p>
+            <p className="muted">
+              Charts below use retained trace history for the selected window.
+            </p>
           </div>
-          <select value={range} onChange={(e) => setRange(e.target.value as TraceRangePreset)}>
+          <select
+            value={range}
+            onChange={(e) => setRange(e.target.value as TraceRangePreset)}
+          >
             <option value="24h">Last 24h</option>
             <option value="7d">Last 7d</option>
             <option value="30d">Last 30d</option>
@@ -489,19 +583,38 @@ export function AccountsTab(props: Props) {
       </section>
 
       <section className="grid cards4">
-        <Metric title="Requests (selected range)" value={`${traceStats.totals.requests}`} />
-        <Metric title="Tokens (selected range)" value={formatTokenCount(traceStats.totals.tokensTotal)} />
-        <Metric title="Estimated cost (selected range)" value={usd(traceStats.totals.costUsd)} />
-        <Metric title="Accounts with traffic" value={`${traceUsageStats.byAccount.length}`} />
+        <Metric
+          title="Requests (selected range)"
+          value={`${traceStats.totals.requests}`}
+        />
+        <Metric
+          title="Tokens (selected range)"
+          value={formatTokenCount(traceStats.totals.tokensTotal)}
+        />
+        <Metric
+          title="Estimated cost (selected range)"
+          value={usd(traceStats.totals.costUsd)}
+        />
+        <Metric
+          title="Accounts with traffic"
+          value={`${traceUsageStats.byAccount.length}`}
+        />
       </section>
 
       <section className="accounts-layout-actions">
         <p className="muted">Accounts analytics layout is saved globally.</p>
         <div className="inline wrap">
-          <button className="btn ghost" onClick={() => setLayoutEditMode((current) => !current)}>
+          <button
+            className="btn ghost"
+            onClick={() => setLayoutEditMode((current) => !current)}
+          >
             {layoutEditMode ? "Done editing" : "Edit analytics"}
           </button>
-          <button className="btn secondary" onClick={resetAccountsLayout} disabled={!layoutChanged}>
+          <button
+            className="btn secondary"
+            onClick={resetAccountsLayout}
+            disabled={!layoutChanged}
+          >
             Reset analytics
           </button>
         </div>
@@ -512,7 +625,11 @@ export function AccountsTab(props: Props) {
           <div className="inline wrap">
             <span className="muted">Hidden sections:</span>
             {hiddenSections.map((sectionId) => (
-              <button key={sectionId} className="btn ghost small" onClick={() => toggleAccountsSectionHidden(sectionId)}>
+              <button
+                key={sectionId}
+                className="btn ghost small"
+                onClick={() => toggleAccountsSectionHidden(sectionId)}
+              >
                 Show {sectionLabel(sectionId)}
               </button>
             ))}
@@ -528,18 +645,31 @@ export function AccountsTab(props: Props) {
               <div className="tracing-card-head">
                 <h2>{sections[sectionId].title}</h2>
                 <div className="inline wrap tracing-card-toolbar">
-                  <button className="btn ghost small" onClick={() => toggleAccountsSectionHidden(sectionId)}>
+                  <button
+                    className="btn ghost small"
+                    onClick={() => toggleAccountsSectionHidden(sectionId)}
+                  >
                     Hide
                   </button>
                   {layoutEditMode && (
                     <>
-                      <button className="btn ghost small" onClick={() => moveAccountsSection(sectionId, -1)} disabled={index === 0}>
+                      <button
+                        className="btn ghost small"
+                        onClick={() => moveAccountsSection(sectionId, -1)}
+                        disabled={index === 0}
+                      >
                         Earlier
                       </button>
                       <button
                         className="btn ghost small"
                         onClick={() => moveAccountsSection(sectionId, 1)}
-                        disabled={index === accountsPreferences.sectionOrder.filter((entry) => !hiddenSections.includes(entry)).length - 1}
+                        disabled={
+                          index ===
+                          accountsPreferences.sectionOrder.filter(
+                            (entry) => !hiddenSections.includes(entry),
+                          ).length -
+                            1
+                        }
                       >
                         Later
                       </button>
@@ -561,10 +691,33 @@ export function AccountsTab(props: Props) {
         </div>
         {providerQuotaStats.degraded > 0 && (
           <p className="warning-text">
-            {providerQuotaStats.degraded} account{providerQuotaStats.degraded === 1 ? "" : "s"} need a `ChatGPT-Account-Id`
-            refresh before weekly provider quota can be trusted.
+            {providerQuotaStats.degraded} account
+            {providerQuotaStats.degraded === 1 ? "" : "s"} need a
+            `ChatGPT-Account-Id` refresh before weekly provider quota can be
+            trusted.
           </p>
         )}
+        <div className="inline wrap" style={{ marginBottom: 12 }}>
+          <label>
+            Routing mode
+            <select
+              value={proxySettings.routingMode}
+              onChange={(event) =>
+                void patchProxySettings({
+                  routingMode: event.target
+                    .value as ProxySettings["routingMode"],
+                })
+              }
+            >
+              <option value="quota_aware">Quota aware (default)</option>
+              <option value="round_robin">Round robin</option>
+            </select>
+          </label>
+          <span className="muted">
+            Round robin rotates across eligible accounts; quota aware keeps the
+            current routing behavior.
+          </span>
+        </div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -572,6 +725,7 @@ export function AccountsTab(props: Props) {
                 <th>Vendor</th>
                 <th>Email</th>
                 <th>ID</th>
+                <th>Profile</th>
                 <th>5h</th>
                 <th>Week</th>
                 <th>Quota status</th>
@@ -594,25 +748,51 @@ export function AccountsTab(props: Props) {
                       {providerLabel(account.provider)}
                     </span>
                   </td>
-                  <td>{sanitized ? maskEmail(account.email) : account.email ?? "-"}</td>
-                  <td className="mono">{sanitized ? maskId(account.id) : account.id}</td>
                   <td>
-                    {typeof account.usage?.primary?.usedPercent === "number" ? `${Math.round(account.usage.primary.usedPercent)}%` : "?"}
+                    {sanitized
+                      ? maskEmail(account.email)
+                      : (account.email ?? "-")}
+                  </td>
+                  <td className="mono">
+                    {sanitized ? maskId(account.id) : account.id}
+                  </td>
+                  <td>{quotaProfileLabel(account)}</td>
+                  <td>
+                    {effectiveQuotaProfile(account) === "weekly_only"
+                      ? "n/a"
+                      : typeof account.usage?.primary?.usedPercent === "number"
+                        ? `${Math.round(account.usage.primary.usedPercent)}%`
+                        : "?"}
                     <small>{fmt(account.usage?.primary?.resetAt)}</small>
                   </td>
                   <td>
-                    {typeof account.usage?.secondary?.usedPercent === "number" ? `${Math.round(account.usage.secondary.usedPercent)}%` : "?"}
+                    {typeof account.usage?.secondary?.usedPercent === "number"
+                      ? `${Math.round(account.usage.secondary.usedPercent)}%`
+                      : "?"}
                     <small>{fmt(account.usage?.secondary?.resetAt)}</small>
                   </td>
                   <td>
-                    <span className={account.usage?.scope === "account" ? "muted" : "warning-text"}>
+                    <span
+                      className={
+                        account.usage?.scope === "account"
+                          ? "muted"
+                          : "warning-text"
+                      }
+                    >
                       {quotaStatus(account)}
                     </span>
                   </td>
                   <td>{fmt(account.state?.blockedUntil)}</td>
-                  <td className="mono">{account.state?.lastError?.slice(0, 80) ?? "-"}</td>
+                  <td className="mono">
+                    {account.state?.lastError?.slice(0, 80) ?? "-"}
+                  </td>
                   <td className="inline wrap">
-                    <button className="btn ghost" onClick={() => openEditModal(account)}>Change key</button>
+                    <button
+                      className="btn ghost"
+                      onClick={() => openEditModal(account)}
+                    >
+                      Change key
+                    </button>
                     {account.provider !== "mistral" && (
                       <button
                         className="btn ghost"
@@ -622,12 +802,32 @@ export function AccountsTab(props: Props) {
                         {oauthBusyId === account.id ? "Opening..." : "Reauth"}
                       </button>
                     )}
-                    <button className="btn ghost" onClick={() => void patch(account.id, { enabled: !account.enabled })}>
+                    <button
+                      className="btn ghost"
+                      onClick={() =>
+                        void patch(account.id, { enabled: !account.enabled })
+                      }
+                    >
                       {account.enabled ? "Disable" : "Enable"}
                     </button>
-                    <button className="btn ghost" onClick={() => void unblock(account.id)}>Unblock</button>
-                    <button className="btn ghost" onClick={() => void refreshUsage(account.id)}>Refresh</button>
-                    <button className="btn danger" onClick={() => void del(account.id)}>Delete</button>
+                    <button
+                      className="btn ghost"
+                      onClick={() => void unblock(account.id)}
+                    >
+                      Unblock
+                    </button>
+                    <button
+                      className="btn ghost"
+                      onClick={() => void refreshUsage(account.id)}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      className="btn danger"
+                      onClick={() => void del(account.id)}
+                    >
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -648,39 +848,82 @@ export function AccountsTab(props: Props) {
             <div className="grid modal-grid">
               <label>
                 Provider
-                <select value={provider} onChange={(e) => setProvider(e.target.value as "openai" | "mistral")}>
+                <select
+                  value={provider}
+                  onChange={(e) =>
+                    setProvider(e.target.value as "openai" | "mistral")
+                  }
+                >
                   <option value="openai">OpenAI</option>
                   <option value="mistral">Mistral</option>
                 </select>
               </label>
               <label>
                 Email (optional)
-                <input value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} placeholder="account@email.com" />
+                <input
+                  value={manualEmail}
+                  onChange={(e) => setManualEmail(e.target.value)}
+                  placeholder="account@email.com"
+                />
               </label>
               {provider === "mistral" ? (
                 <>
                   <label>
                     Access token
-                    <input value={manualAccessToken} onChange={(e) => setManualAccessToken(e.target.value)} placeholder="Required" />
+                    <input
+                      value={manualAccessToken}
+                      onChange={(e) => setManualAccessToken(e.target.value)}
+                      placeholder="Required"
+                    />
                   </label>
                   <label>
                     Refresh token (optional)
-                    <input value={manualRefreshToken} onChange={(e) => setManualRefreshToken(e.target.value)} placeholder="Optional" />
+                    <input
+                      value={manualRefreshToken}
+                      onChange={(e) => setManualRefreshToken(e.target.value)}
+                      placeholder="Optional"
+                    />
                   </label>
                 </>
               ) : (
                 <div className="muted">
-                  OpenAI onboarding uses OAuth. Start the flow, complete the browser callback,
-                  then paste the full callback URL here instead of entering access or refresh
-                  tokens manually.
+                  OpenAI onboarding uses OAuth. Start the flow, complete the
+                  browser callback, then paste the full callback URL here
+                  instead of entering access or refresh tokens manually.
                 </div>
               )}
               <label>
                 Priority
-                <input value={manualPriority} onChange={(e) => setManualPriority(e.target.value)} placeholder="0" />
+                <input
+                  value={manualPriority}
+                  onChange={(e) => setManualPriority(e.target.value)}
+                  placeholder="0"
+                />
+              </label>
+              <label>
+                Quota profile
+                <select
+                  value={manualQuotaProfile}
+                  onChange={(e) =>
+                    setManualQuotaProfile(
+                      e.target.value as
+                        | "auto"
+                        | "weekly_only"
+                        | "windowed_and_weekly",
+                    )
+                  }
+                >
+                  <option value="auto">Auto detect</option>
+                  <option value="weekly_only">Weekly only</option>
+                  <option value="windowed_and_weekly">5h + weekly</option>
+                </select>
               </label>
               <label className="inline">
-                <input type="checkbox" checked={manualEnabled} onChange={(e) => setManualEnabled(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={manualEnabled}
+                  onChange={(e) => setManualEnabled(e.target.checked)}
+                />
                 Enabled
               </label>
             </div>
@@ -689,7 +932,9 @@ export function AccountsTab(props: Props) {
                 className="btn"
                 disabled={
                   isSubmitting ||
-                  (provider === "openai" ? !manualEmail.trim() : !manualAccessToken.trim())
+                  (provider === "openai"
+                    ? !manualEmail.trim()
+                    : !manualAccessToken.trim())
                 }
                 onClick={() => void submitManualAccount()}
               >
@@ -739,7 +984,9 @@ export function AccountsTab(props: Props) {
                       value={editingAccount.accessToken}
                       onChange={(e) =>
                         setEditingAccount((current) =>
-                          current ? { ...current, accessToken: e.target.value } : current,
+                          current
+                            ? { ...current, accessToken: e.target.value }
+                            : current,
                         )
                       }
                       placeholder="Required"
@@ -751,7 +998,9 @@ export function AccountsTab(props: Props) {
                       value={editingAccount.refreshToken}
                       onChange={(e) =>
                         setEditingAccount((current) =>
-                          current ? { ...current, refreshToken: e.target.value } : current,
+                          current
+                            ? { ...current, refreshToken: e.target.value }
+                            : current,
                         )
                       }
                       placeholder="Optional"
@@ -761,8 +1010,9 @@ export function AccountsTab(props: Props) {
               ) : (
                 <>
                   <div className="muted">
-                    OpenAI reauth uses OAuth. Use “Save metadata” to repair account-scoped usage fields
-                    without rotating tokens, or start reauth if the login session itself needs repair.
+                    OpenAI reauth uses OAuth. Use “Save metadata” to repair
+                    account-scoped usage fields without rotating tokens, or
+                    start reauth if the login session itself needs repair.
                   </div>
                   <label>
                     ChatGPT account ID (optional)
@@ -770,7 +1020,9 @@ export function AccountsTab(props: Props) {
                       value={editingAccount.chatgptAccountId}
                       onChange={(e) =>
                         setEditingAccount((current) =>
-                          current ? { ...current, chatgptAccountId: e.target.value } : current,
+                          current
+                            ? { ...current, chatgptAccountId: e.target.value }
+                            : current,
                         )
                       }
                       placeholder="Required for account-scoped OpenAI quota refresh"
@@ -784,11 +1036,36 @@ export function AccountsTab(props: Props) {
                   value={editingAccount.priority}
                   onChange={(e) =>
                     setEditingAccount((current) =>
-                      current ? { ...current, priority: e.target.value } : current,
+                      current
+                        ? { ...current, priority: e.target.value }
+                        : current,
                     )
                   }
                   placeholder="0"
                 />
+              </label>
+              <label>
+                Quota profile
+                <select
+                  value={editingAccount.quotaProfile}
+                  onChange={(e) =>
+                    setEditingAccount((current) =>
+                      current
+                        ? {
+                            ...current,
+                            quotaProfile: e.target.value as
+                              | "auto"
+                              | "weekly_only"
+                              | "windowed_and_weekly",
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  <option value="auto">Auto detect</option>
+                  <option value="weekly_only">Weekly only</option>
+                  <option value="windowed_and_weekly">5h + weekly</option>
+                </select>
               </label>
               <label className="inline">
                 <input
@@ -796,7 +1073,9 @@ export function AccountsTab(props: Props) {
                   checked={editingAccount.enabled}
                   onChange={(e) =>
                     setEditingAccount((current) =>
-                      current ? { ...current, enabled: e.target.checked } : current,
+                      current
+                        ? { ...current, enabled: e.target.checked }
+                        : current,
                     )
                   }
                 />
@@ -806,7 +1085,11 @@ export function AccountsTab(props: Props) {
             <div className="inline wrap">
               {editingAccount.provider === "openai" ? (
                 <>
-                  <button className="btn secondary" disabled={isSavingEdit} onClick={() => void saveOpenAiMetadata()}>
+                  <button
+                    className="btn secondary"
+                    disabled={isSavingEdit}
+                    onClick={() => void saveOpenAiMetadata()}
+                  >
                     {isSavingEdit ? "Saving..." : "Save metadata"}
                   </button>
                   <button
@@ -838,7 +1121,11 @@ export function AccountsTab(props: Props) {
         <div className="modal-backdrop" onClick={closeOauthDialog}>
           <div className="modal panel" onClick={(e) => e.stopPropagation()}>
             <div className="inline wrap row-between">
-              <h2>{oauthDialog.mode === "create" ? "Complete OpenAI OAuth" : "Complete OpenAI reauth"}</h2>
+              <h2>
+                {oauthDialog.mode === "create"
+                  ? "Complete OpenAI OAuth"
+                  : "Complete OpenAI reauth"}
+              </h2>
               <button className="btn ghost" onClick={closeOauthDialog}>
                 Close
               </button>
@@ -858,7 +1145,9 @@ export function AccountsTab(props: Props) {
                   value={oauthDialog.callbackInput}
                   onChange={(e) =>
                     setOauthDialog((current) =>
-                      current ? { ...current, callbackInput: e.target.value } : current,
+                      current
+                        ? { ...current, callbackInput: e.target.value }
+                        : current,
                     )
                   }
                   placeholder="Paste the full URL after the browser reaches the callback page"
@@ -867,14 +1156,17 @@ export function AccountsTab(props: Props) {
               </label>
             </div>
             <div className="muted">
-              Complete the OpenAI login in the opened browser tab. When the browser reaches
-              the callback page, the full URL should autofill here. If it does not, copy the
-              full URL and paste it here. Do not paste access or refresh tokens.
+              Complete the OpenAI login in the opened browser tab. When the
+              browser reaches the callback page, the full URL should autofill
+              here. If it does not, copy the full URL and paste it here. Do not
+              paste access or refresh tokens.
             </div>
             <div className="inline wrap">
               <button
                 className="btn"
-                disabled={oauthDialog.isSubmitting || !oauthDialog.callbackInput.trim()}
+                disabled={
+                  oauthDialog.isSubmitting || !oauthDialog.callbackInput.trim()
+                }
                 onClick={() => void submitOauthCallback()}
               >
                 {oauthDialog.isSubmitting ? "Saving..." : "Finish OAuth"}

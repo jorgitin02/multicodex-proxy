@@ -286,7 +286,10 @@ async function discoverModels(
       .filter((a) => a.enabled && a.targets.length > 0);
     for (const alias of aliases) {
       const firstTarget = alias.targets[0];
-      const provider = inferProviderFromModel(firstTarget, Array.from(byId.values()));
+      const provider = inferProviderFromModel(
+        firstTarget,
+        Array.from(byId.values()),
+      );
       byId.set(alias.id, {
         ...modelObject(alias.id, provider),
         metadata: {
@@ -324,7 +327,9 @@ function buildRoutingCandidates(
   aliases: ModelAlias[],
 ): RoutingCandidate[] {
   const key = normalizeModelLookupKey(requestModel);
-  const alias = aliases.find((a) => a.enabled && normalizeModelLookupKey(a.id) === key);
+  const alias = aliases.find(
+    (a) => a.enabled && normalizeModelLookupKey(a.id) === key,
+  );
   const targets =
     alias && alias.targets.length
       ? alias.targets
@@ -476,7 +481,11 @@ async function readChunkWithInactivityTimeout(
       cleanup();
       void reader.cancel().catch(() => {});
       const reason = abortSignal?.reason;
-      reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")));
+      reject(
+        reason instanceof Error
+          ? reason
+          : new Error(String(reason ?? "aborted")),
+      );
     };
 
     if (abortSignal) {
@@ -749,16 +758,16 @@ async function fetchCodexWithRetry(
 }
 
 export function createProxyRouter(options: ProxyRoutesOptions) {
-    const {
-      store,
-      traceManager,
-      openaiBaseUrl,
-      mistralBaseUrl,
-      mistralUpstreamPath,
-      mistralCompactUpstreamPath,
-      oauthConfig,
-      upstreamRequestTimeoutMs = UPSTREAM_REQUEST_TIMEOUT_MS,
-    } = options;
+  const {
+    store,
+    traceManager,
+    openaiBaseUrl,
+    mistralBaseUrl,
+    mistralUpstreamPath,
+    mistralCompactUpstreamPath,
+    oauthConfig,
+    upstreamRequestTimeoutMs = UPSTREAM_REQUEST_TIMEOUT_MS,
+  } = options;
   const { appendTrace } = traceManager;
   const router = express.Router();
 
@@ -794,7 +803,7 @@ export function createProxyRouter(options: ProxyRoutesOptions) {
       if (!res.writableEnded) abortFromClient();
     });
 
-let accounts = store.getCachedAccounts();
+    let accounts = store.getCachedAccounts();
     if (!accounts.length)
       return res.status(503).json({ error: "no accounts configured" });
 
@@ -802,7 +811,9 @@ let accounts = store.getCachedAccounts();
       accounts.map(async (account) => {
         const valid = await ensureValidToken(account, oauthConfig);
         const usageBaseUrl =
-          normalizeProvider(valid) === "mistral" ? mistralBaseUrl : openaiBaseUrl;
+          normalizeProvider(valid) === "mistral"
+            ? mistralBaseUrl
+            : openaiBaseUrl;
         const usageFetchedAt = valid.usage?.fetchedAt ?? 0;
         if (Date.now() - usageFetchedAt >= USAGE_CACHE_TTL_MS) {
           refreshUsageInBackground(valid, usageBaseUrl);
@@ -810,13 +821,15 @@ let accounts = store.getCachedAccounts();
         return valid;
       }),
     );
-    for (const account of accounts) store.markAccountModified(account.id, account);
+    for (const account of accounts)
+      store.markAccountModified(account.id, account);
 
     const requestModel =
       typeof req.body?.model === "string" && req.body.model.trim()
         ? req.body.model.trim()
         : undefined;
     const modelAliases = store.getCachedModelAliases();
+    const proxySettings = store.getCachedProxySettings();
     const routingCandidates = buildRoutingCandidates(
       requestModel,
       modelsCache.models,
@@ -846,117 +859,304 @@ let accounts = store.getCachedAccounts();
         const selected = chooseAccountForProvider(
           providerAccounts.filter((a) => !tried.has(a.id)),
           candidate.provider,
+          { routingMode: proxySettings.routingMode },
         );
-      if (!selected) break;
+        if (!selected) break;
 
-      tried.add(selected.id);
-      selected.state = { ...selected.state, lastSelectedAt: Date.now() };
-      await store.upsertAccount(selected);
+        tried.add(selected.id);
+        selected.state = { ...selected.state, lastSelectedAt: Date.now() };
+        await store.upsertAccount(selected);
 
-      const shouldReturnChatCompletions = isChatCompletionsPath;
-      let payloadToUpstream = isChatCompletions
-        ? chatCompletionsToResponsesPayload(req.body, sessionId)
-        : normalizeResponsesPayload(req.body, sessionId);
-      if (isResponsesCompactPath && payloadToUpstream && typeof payloadToUpstream === "object") {
-        delete payloadToUpstream.store;
-        delete payloadToUpstream.stream;
-        delete payloadToUpstream.include;
-      }
-      if (candidate.resolvedModel) payloadToUpstream.model = candidate.resolvedModel;
-      const requestBody = TRACE_INCLUDE_BODY ? req.body : undefined;
-      const tracedModel =
-        requestModel ??
-        (typeof payloadToUpstream?.model === "string" &&
-        payloadToUpstream.model.trim()
-          ? payloadToUpstream.model.trim()
-          : undefined);
-
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-        authorization: `Bearer ${selected.accessToken}`,
-        accept: "text/event-stream",
-        originator: "pi",
-        "User-Agent": PI_USER_AGENT,
-      };
-      if (candidate.provider === "openai") {
-        headers["OpenAI-Beta"] = "responses=experimental";
-      }
-      if (candidate.provider === "openai" && selected.chatgptAccountId) {
-        headers["chatgpt-account-id"] = selected.chatgptAccountId;
-      }
-      if (sessionId) headers.session_id = sessionId;
-
-      try {
-        const upstreamBaseUrl =
-          candidate.provider === "mistral" ? mistralBaseUrl : openaiBaseUrl;
-        const upstreamPath =
-          candidate.provider === "mistral"
-            ? isResponsesCompactPath
-              ? mistralCompactUpstreamPath
-              : mistralUpstreamPath
-            : isResponsesCompactPath
-              ? UPSTREAM_COMPACT_PATH
-              : UPSTREAM_PATH;
-        const requestSignal = createRequestSignal(
-          upstreamRequestTimeoutMs,
-          clientAbort.signal,
-        );
-        const upstream = await fetch(`${upstreamBaseUrl}${upstreamPath}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payloadToUpstream),
-          signal: requestSignal.signal,
-        });
-        requestSignal.clearTimeout();
-
-        const contentType = upstream.headers.get("content-type") ?? "";
-        let isStream = contentType.includes("text/event-stream");
-        let prefetchedText = "";
-        let prefetchedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-        let prefetchedDecoder: TextDecoder | null = null;
-
+        const shouldReturnChatCompletions = isChatCompletionsPath;
+        let payloadToUpstream = isChatCompletions
+          ? chatCompletionsToResponsesPayload(req.body, sessionId)
+          : normalizeResponsesPayload(req.body, sessionId);
         if (
-          upstream.ok &&
-          clientRequestedStream &&
-          !shouldReturnChatCompletions &&
-          !isStream &&
-          upstream.body
+          isResponsesCompactPath &&
+          payloadToUpstream &&
+          typeof payloadToUpstream === "object"
         ) {
-          const peeked = await peekResponseTextStart(
-            upstream,
+          delete payloadToUpstream.store;
+          delete payloadToUpstream.stream;
+          delete payloadToUpstream.include;
+        }
+        if (candidate.resolvedModel)
+          payloadToUpstream.model = candidate.resolvedModel;
+        const requestBody = TRACE_INCLUDE_BODY ? req.body : undefined;
+        const tracedModel =
+          requestModel ??
+          (typeof payloadToUpstream?.model === "string" &&
+          payloadToUpstream.model.trim()
+            ? payloadToUpstream.model.trim()
+            : undefined);
+
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          authorization: `Bearer ${selected.accessToken}`,
+          accept: "text/event-stream",
+          originator: "pi",
+          "User-Agent": PI_USER_AGENT,
+        };
+        if (candidate.provider === "openai") {
+          headers["OpenAI-Beta"] = "responses=experimental";
+        }
+        if (candidate.provider === "openai" && selected.chatgptAccountId) {
+          headers["chatgpt-account-id"] = selected.chatgptAccountId;
+        }
+        if (sessionId) headers.session_id = sessionId;
+
+        try {
+          const upstreamBaseUrl =
+            candidate.provider === "mistral" ? mistralBaseUrl : openaiBaseUrl;
+          const upstreamPath =
+            candidate.provider === "mistral"
+              ? isResponsesCompactPath
+                ? mistralCompactUpstreamPath
+                : mistralUpstreamPath
+              : isResponsesCompactPath
+                ? UPSTREAM_COMPACT_PATH
+                : UPSTREAM_PATH;
+          const requestSignal = createRequestSignal(
             upstreamRequestTimeoutMs,
             clientAbort.signal,
           );
-          prefetchedText = peeked.initialText;
-          prefetchedReader = peeked.reader;
-          prefetchedDecoder = peeked.decoder;
-          if (looksLikeSSEPayload(prefetchedText)) isStream = true;
-        }
-        if (upstream.ok) {
-          clearAuthFailureState(selected);
-          markModelCompatibility(
-            selected,
-            candidate.resolvedModel ?? requestModel,
-            true,
-          );
-          await store.upsertAccount(selected);
-        }
+          const upstream = await fetch(`${upstreamBaseUrl}${upstreamPath}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payloadToUpstream),
+            signal: requestSignal.signal,
+          });
+          requestSignal.clearTimeout();
 
-        if (isStream) {
-          if (shouldReturnChatCompletions && clientRequestedStream) {
-            res.set("Content-Type", "text/event-stream");
-            res.set("Cache-Control", "no-cache");
-            res.set("Connection", "keep-alive");
+          const contentType = upstream.headers.get("content-type") ?? "";
+          let isStream = contentType.includes("text/event-stream");
+          let prefetchedText = "";
+          let prefetchedReader: ReadableStreamDefaultReader<Uint8Array> | null =
+            null;
+          let prefetchedDecoder: TextDecoder | null = null;
 
-            const model =
-              req.body?.model ?? payloadToUpstream?.model ?? "unknown";
+          if (
+            upstream.ok &&
+            clientRequestedStream &&
+            !shouldReturnChatCompletions &&
+            !isStream &&
+            upstream.body
+          ) {
+            const peeked = await peekResponseTextStart(
+              upstream,
+              upstreamRequestTimeoutMs,
+              clientAbort.signal,
+            );
+            prefetchedText = peeked.initialText;
+            prefetchedReader = peeked.reader;
+            prefetchedDecoder = peeked.decoder;
+            if (looksLikeSSEPayload(prefetchedText)) isStream = true;
+          }
+          if (upstream.ok) {
+            clearAuthFailureState(selected);
+            markModelCompatibility(
+              selected,
+              candidate.resolvedModel ?? requestModel,
+              true,
+            );
+            await store.upsertAccount(selected);
+          }
+
+          if (isStream) {
+            if (shouldReturnChatCompletions && clientRequestedStream) {
+              res.set("Content-Type", "text/event-stream");
+              res.set("Cache-Control", "no-cache");
+              res.set("Connection", "keep-alive");
+
+              const model =
+                req.body?.model ?? payloadToUpstream?.model ?? "unknown";
+              let accumulatedUsage: any = null;
+              let streamedFallbackText = "";
+
+              if (!upstream.body) return res.end();
+              const reader = upstream.body.getReader();
+              const decoder = new TextDecoder();
+              let doneSent = false;
+
+              while (true) {
+                const { value, done } = await readChunkWithInactivityTimeout(
+                  reader,
+                  upstreamRequestTimeoutMs,
+                  clientAbort.signal,
+                );
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split("\n");
+
+                for (const line of lines) {
+                  if (!line.startsWith("data:")) continue;
+
+                  const payload = line.slice(5).trim();
+                  if (payload && payload !== "[DONE]") {
+                    try {
+                      const event = JSON.parse(payload);
+                      if (
+                        event?.type === "response.output_text.delta" &&
+                        typeof event?.delta === "string"
+                      ) {
+                        streamedFallbackText += sanitizeAssistantTextChunk(
+                          event.delta,
+                        );
+                      } else if (
+                        event?.type === "response.output_text.done" &&
+                        !streamedFallbackText &&
+                        typeof event?.text === "string"
+                      ) {
+                        streamedFallbackText = sanitizeAssistantTextChunk(
+                          event.text,
+                        );
+                      }
+                    } catch {}
+                  }
+
+                  const converted = convertResponsesSSEToChatCompletionSSE(
+                    line,
+                    model,
+                    streamedFallbackText,
+                  );
+                  if (converted) {
+                    res.write(converted);
+                    if (converted.includes("[DONE]")) doneSent = true;
+                  } else if (line.includes('"response.reasoning')) {
+                    res.write(": keepalive\n\n");
+                  }
+
+                  if (line.includes("response.completed")) {
+                    try {
+                      const payload = JSON.parse(line.slice(5).trim());
+                      accumulatedUsage = payload?.response?.usage;
+                    } catch {}
+                  }
+                }
+              }
+              if (!doneSent) res.write("data: [DONE]\n\n");
+              res.end();
+
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: accumulatedUsage,
+                requestBody,
+              });
+              return;
+            }
+
+            if (shouldReturnChatCompletions) {
+              const txt = await readResponsesSSETextUntilTerminal(
+                upstream,
+                upstreamRequestTimeoutMs,
+                clientAbort.signal,
+              );
+              const parsedChat = parseResponsesSSEToChatCompletion(
+                txt,
+                req.body?.model ?? payloadToUpstream?.model ?? "unknown",
+              );
+              const normalized = ensureNonEmptyChatCompletion(parsedChat);
+              res
+                .status(upstream.ok ? 200 : upstream.status)
+                .json(normalized.chat);
+
+              const upstreamError = !upstream.ok
+                ? txt.slice(0, 500)
+                : undefined;
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: normalized.chat?.usage,
+                requestBody,
+                upstreamError,
+                upstreamContentType: contentType,
+                ...inspectAssistantPayload(normalized.chat),
+              });
+              return;
+            }
+
+            if (!clientRequestedStream) {
+              const txt = await readResponsesSSETextUntilTerminal(
+                upstream,
+                upstreamRequestTimeoutMs,
+                clientAbort.signal,
+              );
+              const respObj = parseResponsesSSEToResponseObject(txt);
+              res.status(upstream.ok ? 200 : upstream.status).json(respObj);
+              const upstreamError = !upstream.ok
+                ? txt.slice(0, 500)
+                : undefined;
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: false,
+                latencyMs: Date.now() - startedAt,
+                usage: respObj?.usage,
+                requestBody,
+                upstreamError,
+                upstreamContentType: contentType,
+              });
+              return;
+            }
+
+            res.status(upstream.status);
+            setForwardHeaders(upstream, res);
+            res.flushHeaders();
+            const reader =
+              prefetchedReader ?? upstream.body?.getReader() ?? null;
+            const decoder = prefetchedDecoder ?? new TextDecoder();
+            if (!reader) return res.end();
+            let sseBuffer = "";
             let accumulatedUsage: any = null;
-            let streamedFallbackText = "";
 
-            if (!upstream.body) return res.end();
-            const reader = upstream.body.getReader();
-            const decoder = new TextDecoder();
-            let doneSent = false;
+            const consumeChunkText = (chunkText: string) => {
+              if (!chunkText) return;
+              res.write(chunkText);
+              sseBuffer += chunkText;
+
+              while (true) {
+                const next = takeNextSSEFrame(sseBuffer);
+                if (!next) break;
+                sseBuffer = next.rest;
+
+                const payload = extractSSEDataPayload(next.frame);
+                if (payload?.type === "response.completed") {
+                  if (payload?.response?.usage) {
+                    accumulatedUsage = payload.response.usage;
+                  }
+                  continue;
+                }
+                if (
+                  payload?.type === "response.output_text.done" &&
+                  typeof payload?.text === "string"
+                ) {
+                  continue;
+                }
+              }
+            };
+
+            consumeChunkText(prefetchedText);
 
             while (true) {
               const { value, done } = await readChunkWithInactivityTimeout(
@@ -965,57 +1165,10 @@ let accounts = store.getCachedAccounts();
                 clientAbort.signal,
               );
               if (done) break;
-
-              const chunk = decoder.decode(value, { stream: true });
-              const lines = chunk.split("\n");
-
-              for (const line of lines) {
-                if (!line.startsWith("data:")) continue;
-
-                const payload = line.slice(5).trim();
-                if (payload && payload !== "[DONE]") {
-                  try {
-                    const event = JSON.parse(payload);
-                    if (
-                      event?.type === "response.output_text.delta" &&
-                      typeof event?.delta === "string"
-                    ) {
-                      streamedFallbackText += sanitizeAssistantTextChunk(
-                        event.delta,
-                      );
-                    } else if (
-                      event?.type === "response.output_text.done" &&
-                      !streamedFallbackText &&
-                      typeof event?.text === "string"
-                    ) {
-                      streamedFallbackText = sanitizeAssistantTextChunk(
-                        event.text,
-                      );
-                    }
-                  } catch {}
-                }
-
-                const converted = convertResponsesSSEToChatCompletionSSE(
-                  line,
-                  model,
-                  streamedFallbackText,
-                );
-                if (converted) {
-                  res.write(converted);
-                  if (converted.includes("[DONE]")) doneSent = true;
-                } else if (line.includes('"response.reasoning')) {
-                  res.write(": keepalive\n\n");
-                }
-
-                if (line.includes("response.completed")) {
-                  try {
-                    const payload = JSON.parse(line.slice(5).trim());
-                    accumulatedUsage = payload?.response?.usage;
-                  } catch {}
-                }
-              }
+              consumeChunkText(decoder.decode(value, { stream: true }));
             }
-            if (!doneSent) res.write("data: [DONE]\n\n");
+
+            consumeChunkText(decoder.decode());
             res.end();
 
             await appendTrace({
@@ -1034,50 +1187,292 @@ let accounts = store.getCachedAccounts();
             return;
           }
 
-          if (shouldReturnChatCompletions) {
-            const txt = await readResponsesSSETextUntilTerminal(
+          let bufferedText: string | undefined = undefined;
+          if (shouldReturnChatCompletions && clientRequestedStream) {
+            let raw = await readResponseTextWithInactivityTimeout(
               upstream,
               upstreamRequestTimeoutMs,
               clientAbort.signal,
             );
-            const parsedChat = parseResponsesSSEToChatCompletion(
-              txt,
-              req.body?.model ?? payloadToUpstream?.model ?? "unknown",
-            );
-            const normalized = ensureNonEmptyChatCompletion(parsedChat);
-            res
-              .status(upstream.ok ? 200 : upstream.status)
-              .json(normalized.chat);
+            const upstreamEmptyBody = !raw;
+            if (!raw)
+              raw = JSON.stringify({
+                error: `upstream ${upstream.status} with empty body`,
+              });
+            bufferedText = raw;
 
-            const upstreamError = !upstream.ok ? txt.slice(0, 500) : undefined;
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: true,
-              latencyMs: Date.now() - startedAt,
-              usage: normalized.chat?.usage,
-              requestBody,
-              upstreamError,
-              upstreamContentType: contentType,
-              ...inspectAssistantPayload(normalized.chat),
-            });
-            return;
+            let parsed: any = undefined;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {}
+
+            if (upstream.ok && parsed && parsed.object === "chat.completion") {
+              const normalized = ensureNonEmptyChatCompletion(
+                sanitizeChatCompletionObject(parsed),
+              );
+              res.status(200);
+              res.set("Content-Type", "text/event-stream");
+              res.set("Cache-Control", "no-cache");
+              res.set("Connection", "keep-alive");
+              res.write(chatCompletionObjectToSSE(normalized.chat));
+              res.end();
+
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: normalized.chat?.usage,
+                requestBody,
+                upstreamContentType: contentType,
+                upstreamEmptyBody,
+                ...inspectAssistantPayload(normalized.chat),
+              });
+              return;
+            }
+
+            if (upstream.ok && parsed && parsed.object === "response") {
+              const converted = responseObjectToChatCompletion(
+                parsed,
+                req.body?.model ?? payloadToUpstream?.model ?? "unknown",
+              );
+              res.status(200);
+              res.set("Content-Type", "text/event-stream");
+              res.set("Cache-Control", "no-cache");
+              res.set("Connection", "keep-alive");
+              res.write(chatCompletionObjectToSSE(converted));
+              res.end();
+
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: converted?.usage,
+                requestBody,
+                upstreamContentType: contentType,
+                upstreamEmptyBody,
+                ...inspectAssistantPayload(converted),
+              });
+              return;
+            }
           }
 
-          if (!clientRequestedStream) {
-            const txt = await readResponsesSSETextUntilTerminal(
-              upstream,
-              upstreamRequestTimeoutMs,
-              clientAbort.signal,
-            );
-            const respObj = parseResponsesSSEToResponseObject(txt);
+          let text =
+            bufferedText ??
+            (prefetchedReader && prefetchedDecoder
+              ? await readReaderTextWithInactivityTimeout(
+                  prefetchedReader,
+                  prefetchedDecoder,
+                  upstreamRequestTimeoutMs,
+                  clientAbort.signal,
+                  prefetchedText,
+                )
+              : await readResponseTextWithInactivityTimeout(
+                  upstream,
+                  upstreamRequestTimeoutMs,
+                  clientAbort.signal,
+                ));
+          const upstreamEmptyBody = !text;
+          if (!text)
+            text = JSON.stringify({
+              error: `upstream ${upstream.status} with empty body`,
+            });
+          const upstreamError = !upstream.ok ? text.slice(0, 500) : undefined;
+
+          let parsed: any = undefined;
+          try {
+            parsed = JSON.parse(text);
+          } catch {}
+          if (parsed?.object === "chat.completion") {
+            parsed = sanitizeChatCompletionObject(parsed);
+            text = JSON.stringify(parsed);
+          } else if (parsed?.object === "response") {
+            parsed = stripReasoningFromResponseObject(parsed);
+            text = JSON.stringify(parsed);
+          }
+
+          if (
+            shouldReturnChatCompletions &&
+            clientRequestedStream &&
+            upstream.ok
+          ) {
+            let chatResp: any = undefined;
+
+            if (parsed?.object === "chat.completion") {
+              chatResp = ensureNonEmptyChatCompletion(
+                sanitizeChatCompletionObject(parsed),
+              ).chat;
+            } else if (parsed?.object === "response") {
+              chatResp = responseObjectToChatCompletion(
+                parsed,
+                req.body?.model ?? payloadToUpstream?.model ?? "unknown",
+              );
+            } else if (text.includes("data:")) {
+              chatResp = parseResponsesSSEToChatCompletion(
+                text,
+                req.body?.model ?? payloadToUpstream?.model ?? "unknown",
+              );
+            }
+
+            if (chatResp) {
+              chatResp = ensureNonEmptyChatCompletion(chatResp).chat;
+              res.status(200);
+              res.set("Content-Type", "text/event-stream");
+              res.set("Cache-Control", "no-cache");
+              res.set("Connection", "keep-alive");
+              res.write(chatCompletionObjectToSSE(chatResp));
+              res.end();
+
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: chatResp?.usage,
+                requestBody,
+                upstreamError,
+                upstreamContentType: contentType,
+                upstreamEmptyBody,
+                ...inspectAssistantPayload(chatResp),
+              });
+              return;
+            }
+          }
+
+          if (
+            !shouldReturnChatCompletions &&
+            clientRequestedStream &&
+            upstream.ok
+          ) {
+            if (parsed?.object === "response") {
+              const sanitized = stripReasoningFromResponseObject(parsed);
+              res.status(200);
+              res.set("Content-Type", "text/event-stream");
+              res.set("Cache-Control", "no-cache");
+              res.set("Connection", "keep-alive");
+              res.write(responseObjectToSSE(sanitized));
+              res.end();
+
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: sanitized?.usage,
+                requestBody,
+                upstreamError,
+                upstreamContentType: contentType,
+                upstreamEmptyBody,
+                ...inspectAssistantPayload(sanitized),
+              });
+              return;
+            }
+
+            if (!parsed && text.includes("data:")) {
+              res.status(200);
+              res.set("Content-Type", "text/event-stream");
+              res.set("Cache-Control", "no-cache");
+              res.set("Connection", "keep-alive");
+
+              const rawFrames = text.split(/\n\n/).filter((f) => f.trim());
+              let lastResponseObj: any = null;
+
+              for (const rawFrame of rawFrames) {
+                const filtered = sanitizeResponsesSSEFrame(rawFrame);
+                if (filtered) {
+                  res.write(
+                    filtered.endsWith("\n\n") ? filtered : filtered + "\n\n",
+                  );
+                  if (rawFrame.includes('"response.completed"')) {
+                    try {
+                      const dataLine = rawFrame
+                        .split("\n")
+                        .find((l) => l.startsWith("data:"));
+                      if (dataLine) {
+                        const obj = JSON.parse(dataLine.slice(5).trim());
+                        if (obj?.response) lastResponseObj = obj.response;
+                      }
+                    } catch {}
+                  }
+                }
+              }
+
+              res.end();
+
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: true,
+                latencyMs: Date.now() - startedAt,
+                usage: lastResponseObj?.usage,
+                requestBody,
+                upstreamError,
+                upstreamContentType: contentType,
+                upstreamEmptyBody,
+                ...inspectAssistantPayload(lastResponseObj),
+              });
+              return;
+            }
+          }
+
+          if (text.includes("event: response.")) {
+            if (shouldReturnChatCompletions) {
+              const parsedChat = parseResponsesSSEToChatCompletion(
+                text,
+                req.body?.model ?? payloadToUpstream?.model ?? "unknown",
+              );
+              const normalized = ensureNonEmptyChatCompletion(parsedChat);
+              res
+                .status(upstream.ok ? 200 : upstream.status)
+                .json(normalized.chat);
+              await appendTrace({
+                at: Date.now(),
+                route: req.path,
+                sessionId,
+                accountId: selected.id,
+                accountEmail: selected.email,
+                model: tracedModel,
+                status: upstream.status,
+                stream: false,
+                latencyMs: Date.now() - startedAt,
+                usage: normalized.chat?.usage,
+                requestBody,
+                upstreamError,
+                upstreamContentType: contentType,
+                upstreamEmptyBody,
+                ...inspectAssistantPayload(normalized.chat),
+              });
+              return;
+            }
+
+            const respObj = parseResponsesSSEToResponseObject(text);
             res.status(upstream.ok ? 200 : upstream.status).json(respObj);
-            const upstreamError = !upstream.ok ? txt.slice(0, 500) : undefined;
             await appendTrace({
               at: Date.now(),
               route: req.path,
@@ -1092,362 +1487,25 @@ let accounts = store.getCachedAccounts();
               requestBody,
               upstreamError,
               upstreamContentType: contentType,
-            });
-            return;
-          }
-
-          res.status(upstream.status);
-          setForwardHeaders(upstream, res);
-          res.flushHeaders();
-          const reader = prefetchedReader ?? upstream.body?.getReader() ?? null;
-          const decoder = prefetchedDecoder ?? new TextDecoder();
-          if (!reader) return res.end();
-          let sseBuffer = "";
-          let accumulatedUsage: any = null;
-
-          const consumeChunkText = (chunkText: string) => {
-            if (!chunkText) return;
-            res.write(chunkText);
-            sseBuffer += chunkText;
-
-            while (true) {
-              const next = takeNextSSEFrame(sseBuffer);
-              if (!next) break;
-              sseBuffer = next.rest;
-
-              const payload = extractSSEDataPayload(next.frame);
-              if (payload?.type === "response.completed") {
-                if (payload?.response?.usage) {
-                  accumulatedUsage = payload.response.usage;
-                }
-                continue;
-              }
-              if (
-                payload?.type === "response.output_text.done" &&
-                typeof payload?.text === "string"
-              ) {
-                continue;
-              }
-            }
-          };
-
-          consumeChunkText(prefetchedText);
-
-          while (true) {
-            const { value, done } = await readChunkWithInactivityTimeout(
-              reader,
-              upstreamRequestTimeoutMs,
-              clientAbort.signal,
-            );
-            if (done) break;
-            consumeChunkText(decoder.decode(value, { stream: true }));
-          }
-
-          consumeChunkText(decoder.decode());
-          res.end();
-
-          await appendTrace({
-            at: Date.now(),
-            route: req.path,
-            sessionId,
-            accountId: selected.id,
-            accountEmail: selected.email,
-            model: tracedModel,
-            status: upstream.status,
-            stream: true,
-            latencyMs: Date.now() - startedAt,
-            usage: accumulatedUsage,
-            requestBody,
-          });
-          return;
-        }
-
-        let bufferedText: string | undefined = undefined;
-        if (shouldReturnChatCompletions && clientRequestedStream) {
-          let raw = await readResponseTextWithInactivityTimeout(
-            upstream,
-            upstreamRequestTimeoutMs,
-            clientAbort.signal,
-          );
-          const upstreamEmptyBody = !raw;
-          if (!raw)
-            raw = JSON.stringify({
-              error: `upstream ${upstream.status} with empty body`,
-            });
-          bufferedText = raw;
-
-          let parsed: any = undefined;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {}
-
-          if (upstream.ok && parsed && parsed.object === "chat.completion") {
-            const normalized = ensureNonEmptyChatCompletion(
-              sanitizeChatCompletionObject(parsed),
-            );
-            res.status(200);
-            res.set("Content-Type", "text/event-stream");
-            res.set("Cache-Control", "no-cache");
-            res.set("Connection", "keep-alive");
-            res.write(chatCompletionObjectToSSE(normalized.chat));
-            res.end();
-
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: true,
-              latencyMs: Date.now() - startedAt,
-              usage: normalized.chat?.usage,
-              requestBody,
-              upstreamContentType: contentType,
               upstreamEmptyBody,
-              ...inspectAssistantPayload(normalized.chat),
+              ...inspectAssistantPayload(respObj),
             });
             return;
           }
 
-          if (upstream.ok && parsed && parsed.object === "response") {
-            const converted = responseObjectToChatCompletion(
-              parsed,
-              req.body?.model ?? payloadToUpstream?.model ?? "unknown",
-            );
-            res.status(200);
-            res.set("Content-Type", "text/event-stream");
-            res.set("Cache-Control", "no-cache");
-            res.set("Connection", "keep-alive");
-            res.write(chatCompletionObjectToSSE(converted));
-            res.end();
+          const usage = extractUsageFromPayload(parsed);
+          const quotaFailure =
+            upstream.status === 429 || isQuotaErrorText(text);
+          const authFailure = isAuthFailure(upstream.status, text);
+          const modelUnsupported = isModelUnsupported(upstream.status, text);
+          const shouldRotateAccount =
+            !upstream.ok && (quotaFailure || authFailure || modelUnsupported);
 
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: true,
-              latencyMs: Date.now() - startedAt,
-              usage: converted?.usage,
-              requestBody,
-              upstreamContentType: contentType,
-              upstreamEmptyBody,
-              ...inspectAssistantPayload(converted),
-            });
-            return;
-          }
-        }
-
-        let text =
-          bufferedText ??
-          (prefetchedReader && prefetchedDecoder
-            ? await readReaderTextWithInactivityTimeout(
-                prefetchedReader,
-                prefetchedDecoder,
-                upstreamRequestTimeoutMs,
-                clientAbort.signal,
-                prefetchedText,
-              )
-            : await readResponseTextWithInactivityTimeout(
-                upstream,
-                upstreamRequestTimeoutMs,
-                clientAbort.signal,
-              ));
-        const upstreamEmptyBody = !text;
-        if (!text)
-          text = JSON.stringify({
-            error: `upstream ${upstream.status} with empty body`,
-          });
-        const upstreamError = !upstream.ok ? text.slice(0, 500) : undefined;
-
-        let parsed: any = undefined;
-        try {
-          parsed = JSON.parse(text);
-        } catch {}
-        if (parsed?.object === "chat.completion") {
-          parsed = sanitizeChatCompletionObject(parsed);
-          text = JSON.stringify(parsed);
-        } else if (parsed?.object === "response") {
-          parsed = stripReasoningFromResponseObject(parsed);
-          text = JSON.stringify(parsed);
-        }
-
-        if (
-          shouldReturnChatCompletions &&
-          clientRequestedStream &&
-          upstream.ok
-        ) {
-          let chatResp: any = undefined;
-
-          if (parsed?.object === "chat.completion") {
-            chatResp = ensureNonEmptyChatCompletion(
-              sanitizeChatCompletionObject(parsed),
-            ).chat;
-          } else if (parsed?.object === "response") {
-            chatResp = responseObjectToChatCompletion(
-              parsed,
-              req.body?.model ?? payloadToUpstream?.model ?? "unknown",
-            );
-          } else if (text.includes("data:")) {
-            chatResp = parseResponsesSSEToChatCompletion(
-              text,
-              req.body?.model ?? payloadToUpstream?.model ?? "unknown",
-            );
+          if (!shouldRotateAccount) {
+            res.status(upstream.status);
+            res.type(contentType || "application/json").send(text);
           }
 
-          if (chatResp) {
-            chatResp = ensureNonEmptyChatCompletion(chatResp).chat;
-            res.status(200);
-            res.set("Content-Type", "text/event-stream");
-            res.set("Cache-Control", "no-cache");
-            res.set("Connection", "keep-alive");
-            res.write(chatCompletionObjectToSSE(chatResp));
-            res.end();
-
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: true,
-              latencyMs: Date.now() - startedAt,
-              usage: chatResp?.usage,
-              requestBody,
-              upstreamError,
-              upstreamContentType: contentType,
-              upstreamEmptyBody,
-              ...inspectAssistantPayload(chatResp),
-            });
-            return;
-          }
-        }
-
-        if (
-          !shouldReturnChatCompletions &&
-          clientRequestedStream &&
-          upstream.ok
-        ) {
-          if (parsed?.object === "response") {
-            const sanitized = stripReasoningFromResponseObject(parsed);
-            res.status(200);
-            res.set("Content-Type", "text/event-stream");
-            res.set("Cache-Control", "no-cache");
-            res.set("Connection", "keep-alive");
-            res.write(responseObjectToSSE(sanitized));
-            res.end();
-
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: true,
-              latencyMs: Date.now() - startedAt,
-              usage: sanitized?.usage,
-              requestBody,
-              upstreamError,
-              upstreamContentType: contentType,
-              upstreamEmptyBody,
-              ...inspectAssistantPayload(sanitized),
-            });
-            return;
-          }
-
-          if (!parsed && text.includes("data:")) {
-            res.status(200);
-            res.set("Content-Type", "text/event-stream");
-            res.set("Cache-Control", "no-cache");
-            res.set("Connection", "keep-alive");
-
-            const rawFrames = text.split(/\n\n/).filter((f) => f.trim());
-            let lastResponseObj: any = null;
-
-            for (const rawFrame of rawFrames) {
-              const filtered = sanitizeResponsesSSEFrame(rawFrame);
-              if (filtered) {
-                res.write(
-                  filtered.endsWith("\n\n") ? filtered : filtered + "\n\n",
-                );
-                if (rawFrame.includes('"response.completed"')) {
-                  try {
-                    const dataLine = rawFrame
-                      .split("\n")
-                      .find((l) => l.startsWith("data:"));
-                    if (dataLine) {
-                      const obj = JSON.parse(dataLine.slice(5).trim());
-                      if (obj?.response) lastResponseObj = obj.response;
-                    }
-                  } catch {}
-                }
-              }
-            }
-
-            res.end();
-
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: true,
-              latencyMs: Date.now() - startedAt,
-              usage: lastResponseObj?.usage,
-              requestBody,
-              upstreamError,
-              upstreamContentType: contentType,
-              upstreamEmptyBody,
-              ...inspectAssistantPayload(lastResponseObj),
-            });
-            return;
-          }
-        }
-
-        if (text.includes("event: response.")) {
-          if (shouldReturnChatCompletions) {
-            const parsedChat = parseResponsesSSEToChatCompletion(
-              text,
-              req.body?.model ?? payloadToUpstream?.model ?? "unknown",
-            );
-            const normalized = ensureNonEmptyChatCompletion(parsedChat);
-            res
-              .status(upstream.ok ? 200 : upstream.status)
-              .json(normalized.chat);
-            await appendTrace({
-              at: Date.now(),
-              route: req.path,
-              sessionId,
-              accountId: selected.id,
-              accountEmail: selected.email,
-              model: tracedModel,
-              status: upstream.status,
-              stream: false,
-              latencyMs: Date.now() - startedAt,
-              usage: normalized.chat?.usage,
-              requestBody,
-              upstreamError,
-              upstreamContentType: contentType,
-              upstreamEmptyBody,
-              ...inspectAssistantPayload(normalized.chat),
-            });
-            return;
-          }
-
-          const respObj = parseResponsesSSEToResponseObject(text);
-          res.status(upstream.ok ? 200 : upstream.status).json(respObj);
           await appendTrace({
             at: Date.now(),
             route: req.path,
@@ -1458,137 +1516,107 @@ let accounts = store.getCachedAccounts();
             status: upstream.status,
             stream: false,
             latencyMs: Date.now() - startedAt,
-            usage: respObj?.usage,
+            usage,
             requestBody,
             upstreamError,
             upstreamContentType: contentType,
             upstreamEmptyBody,
-            ...inspectAssistantPayload(respObj),
+            ...inspectAssistantPayload(parsed),
           });
-          return;
-        }
 
-        const usage = extractUsageFromPayload(parsed);
-        const quotaFailure =
-          upstream.status === 429 || isQuotaErrorText(text);
-        const authFailure = isAuthFailure(upstream.status, text);
-        const modelUnsupported = isModelUnsupported(upstream.status, text);
-        const shouldRotateAccount =
-          !upstream.ok &&
-          (quotaFailure || authFailure || modelUnsupported);
+          if (upstream.ok) return;
+          if (quotaFailure) {
+            markQuotaHit(selected, `quota/rate-limit: ${upstream.status}`);
+            await store.upsertAccount(selected);
+            continue;
+          }
+          if (authFailure) {
+            markAuthFailure(selected, `auth failure: ${upstream.status}`);
+            await store.upsertAccount(selected);
+            continue;
+          }
+          if (modelUnsupported) {
+            const failedModel =
+              candidate.resolvedModel ?? requestModel ?? "unknown-model";
+            lastModelUnsupported = {
+              status: upstream.status,
+              text,
+              contentType,
+            };
+            markModelUnsupported(
+              selected,
+              `model unsupported for ${failedModel}: ${upstream.status}`,
+            );
+            await store.upsertAccount(selected);
+            continue;
+          }
 
-        if (!shouldRotateAccount) {
-          res.status(upstream.status);
-          res.type(contentType || "application/json").send(text);
-        }
-
-        await appendTrace({
-          at: Date.now(),
-          route: req.path,
-          sessionId,
-          accountId: selected.id,
-          accountEmail: selected.email,
-          model: tracedModel,
-          status: upstream.status,
-          stream: false,
-          latencyMs: Date.now() - startedAt,
-          usage,
-          requestBody,
-          upstreamError,
-          upstreamContentType: contentType,
-          upstreamEmptyBody,
-          ...inspectAssistantPayload(parsed),
-        });
-
-        if (upstream.ok) return;
-        if (quotaFailure) {
-          markQuotaHit(selected, `quota/rate-limit: ${upstream.status}`);
-          await store.upsertAccount(selected);
-          continue;
-        }
-        if (authFailure) {
-          markAuthFailure(selected, `auth failure: ${upstream.status}`);
-          await store.upsertAccount(selected);
-          continue;
-        }
-        if (modelUnsupported) {
-          const failedModel =
-            candidate.resolvedModel ?? requestModel ?? "unknown-model";
-          lastModelUnsupported = {
-            status: upstream.status,
-            text,
-            contentType,
-          };
-          markModelUnsupported(
+          rememberError(
             selected,
-            `model unsupported for ${failedModel}: ${upstream.status}`,
+            `upstream ${upstream.status}: ${text.slice(0, 200)}`,
           );
           await store.upsertAccount(selected);
-          continue;
-        }
-
-        rememberError(
-          selected,
-          `upstream ${upstream.status}: ${text.slice(0, 200)}`,
-        );
-        await store.upsertAccount(selected);
-        return;
-      } catch (err: any) {
-        const msg = err?.message ?? String(err);
-        const downstreamClientDisconnected = isDownstreamClientDisconnect(
-          err,
-          clientAbort.signal,
-        );
-        const status = downstreamClientDisconnected ? 499 : 599;
-        if (!downstreamClientDisconnected) {
-          rememberError(selected, msg);
-          await store.upsertAccount(selected);
-        }
-        await appendTrace({
-          at: Date.now(),
-          route: req.path,
-          sessionId,
-          accountId: selected.id,
-          accountEmail: selected.email,
-          model: tracedModel,
-          status,
-          stream: false,
-          latencyMs: Date.now() - startedAt,
-          error: msg,
-          requestBody,
-          isError: downstreamClientDisconnected ? false : undefined,
-        });
-        if (downstreamClientDisconnected) return;
-        if (isAbortError(err)) {
-          if (clientRequestedStream) {
-            if (!res.writableEnded) {
-              if (shouldReturnChatCompletions) {
-                res.write("data: [DONE]\n\n");
-              }
-              res.end();
-            }
-            return;
-          }
-          if (res.headersSent) {
-            if (!res.writableEnded) {
-              if (shouldReturnChatCompletions && clientRequestedStream) {
-                res.write("data: [DONE]\n\n");
-              }
-              res.end();
-            }
-            return;
-          }
-          return res.status(504).json({ error: "upstream request timed out" });
-        }
-        if (res.headersSent && !res.writableEnded) {
-          res.end();
           return;
+        } catch (err: any) {
+          const msg = err?.message ?? String(err);
+          const downstreamClientDisconnected = isDownstreamClientDisconnect(
+            err,
+            clientAbort.signal,
+          );
+          const status = downstreamClientDisconnected ? 499 : 599;
+          if (!downstreamClientDisconnected) {
+            rememberError(selected, msg);
+            await store.upsertAccount(selected);
+          }
+          await appendTrace({
+            at: Date.now(),
+            route: req.path,
+            sessionId,
+            accountId: selected.id,
+            accountEmail: selected.email,
+            model: tracedModel,
+            status,
+            stream: false,
+            latencyMs: Date.now() - startedAt,
+            error: msg,
+            requestBody,
+            isError: downstreamClientDisconnected ? false : undefined,
+          });
+          if (downstreamClientDisconnected) return;
+          if (isAbortError(err)) {
+            if (clientRequestedStream) {
+              if (!res.writableEnded) {
+                if (shouldReturnChatCompletions) {
+                  res.write("data: [DONE]\n\n");
+                }
+                res.end();
+              }
+              return;
+            }
+            if (res.headersSent) {
+              if (!res.writableEnded) {
+                if (shouldReturnChatCompletions && clientRequestedStream) {
+                  res.write("data: [DONE]\n\n");
+                }
+                res.end();
+              }
+              return;
+            }
+            return res
+              .status(504)
+              .json({ error: "upstream request timed out" });
+          }
+          if (res.headersSent && !res.writableEnded) {
+            res.end();
+            return;
+          }
         }
       }
     }
-    }
     if (!providerTried) {
-      return res.status(503).json({ error: "no provider accounts configured for requested model" });
+      return res
+        .status(503)
+        .json({ error: "no provider accounts configured for requested model" });
     }
     if (lastModelUnsupported) {
       return res

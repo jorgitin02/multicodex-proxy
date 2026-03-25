@@ -20,6 +20,7 @@ import type {
   DashboardPreferences,
   ExposedModel,
   ModelAlias,
+  ProxySettings,
   Tab,
   Trace,
   TracePagination,
@@ -40,11 +41,17 @@ const initialTab = (q.get("tab") as Tab) || "overview";
 const BASE_REFRESH_MS = 60_000;
 const ACTIVE_TAB_REFRESH_MS = 30_000;
 
-function getRangeBounds(range: TraceRangePreset): { sinceMs?: number; untilMs?: number } {
+function getRangeBounds(range: TraceRangePreset): {
+  sinceMs?: number;
+  untilMs?: number;
+} {
   const now = Date.now();
-  if (range === "24h") return { sinceMs: now - 24 * 60 * 60 * 1000, untilMs: now };
-  if (range === "7d") return { sinceMs: now - 7 * 24 * 60 * 60 * 1000, untilMs: now };
-  if (range === "30d") return { sinceMs: now - 30 * 24 * 60 * 60 * 1000, untilMs: now };
+  if (range === "24h")
+    return { sinceMs: now - 24 * 60 * 60 * 1000, untilMs: now };
+  if (range === "7d")
+    return { sinceMs: now - 7 * 24 * 60 * 60 * 1000, untilMs: now };
+  if (range === "30d")
+    return { sinceMs: now - 30 * 24 * 60 * 60 * 1000, untilMs: now };
   return {};
 }
 
@@ -56,23 +63,35 @@ function buildRangeParams(range: TraceRangePreset) {
   return params;
 }
 
-function filterTraceStatsForModels(input: TraceStats, models: ExposedModel[]): TraceStats {
+function filterTraceStatsForModels(
+  input: TraceStats,
+  models: ExposedModel[],
+): TraceStats {
   if (!input.models.length) return input;
   if (!models.length) return { ...input, models: [] };
   const allowed = new Set(models.map((m) => m.id));
   return {
     ...input,
-    models: input.models.filter((model) => allowed.has(model.model) && model.okCount > 0),
+    models: input.models.filter(
+      (model) => allowed.has(model.model) && model.okCount > 0,
+    ),
   };
 }
 
-function moveItem<T extends string>(list: T[], item: T, direction: -1 | 1): T[] {
+function moveItem<T extends string>(
+  list: T[],
+  item: T,
+  direction: -1 | 1,
+): T[] {
   const next = [...list];
   const currentIndex = next.indexOf(item);
   if (currentIndex < 0) return next;
   const targetIndex = currentIndex + direction;
   if (targetIndex < 0 || targetIndex >= next.length) return next;
-  [next[currentIndex], next[targetIndex]] = [next[targetIndex], next[currentIndex]];
+  [next[currentIndex], next[targetIndex]] = [
+    next[targetIndex],
+    next[currentIndex],
+  ];
   return next;
 }
 
@@ -100,21 +119,38 @@ export default function App() {
   const [locationSearch, setLocationSearch] = useState(window.location.search);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [traces, setTraces] = useState<Trace[]>([]);
-  const [overviewTraceStats, setOverviewTraceStats] = useState<TraceStats>(EMPTY_TRACE_STATS);
-  const [overviewUsageStats, setOverviewUsageStats] = useState<TraceUsageStats>(EMPTY_TRACE_USAGE_STATS);
-  const [accountsTraceStats, setAccountsTraceStats] = useState<TraceStats>(EMPTY_TRACE_STATS);
-  const [accountsUsageStats, setAccountsUsageStats] = useState<TraceUsageStats>(EMPTY_TRACE_USAGE_STATS);
-  const [tracingTraceStats, setTracingTraceStats] = useState<TraceStats>(EMPTY_TRACE_STATS);
-  const [tracingUsageStats, setTracingUsageStats] = useState<TraceUsageStats>(EMPTY_TRACE_USAGE_STATS);
-  const [tracePagination, setTracePagination] = useState<TracePagination>(EMPTY_TRACE_PAGINATION);
+  const [overviewTraceStats, setOverviewTraceStats] =
+    useState<TraceStats>(EMPTY_TRACE_STATS);
+  const [overviewUsageStats, setOverviewUsageStats] = useState<TraceUsageStats>(
+    EMPTY_TRACE_USAGE_STATS,
+  );
+  const [accountsTraceStats, setAccountsTraceStats] =
+    useState<TraceStats>(EMPTY_TRACE_STATS);
+  const [accountsUsageStats, setAccountsUsageStats] = useState<TraceUsageStats>(
+    EMPTY_TRACE_USAGE_STATS,
+  );
+  const [tracingTraceStats, setTracingTraceStats] =
+    useState<TraceStats>(EMPTY_TRACE_STATS);
+  const [tracingUsageStats, setTracingUsageStats] = useState<TraceUsageStats>(
+    EMPTY_TRACE_USAGE_STATS,
+  );
+  const [tracePagination, setTracePagination] = useState<TracePagination>(
+    EMPTY_TRACE_PAGINATION,
+  );
   const [models, setModels] = useState<ExposedModel[]>([]);
   const [aliases, setAliases] = useState<ModelAlias[]>([]);
-  const [dashboardPreferences, setDashboardPreferences] = useState<DashboardPreferences>(DEFAULT_DASHBOARD_PREFERENCES);
+  const [dashboardPreferences, setDashboardPreferences] =
+    useState<DashboardPreferences>(DEFAULT_DASHBOARD_PREFERENCES);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [tabLayoutEditMode, setTabLayoutEditMode] = useState(false);
-  const [adminToken, setAdminToken] = useState(localStorage.getItem("adminToken") ?? tokenDefault);
+  const [adminToken, setAdminToken] = useState(
+    localStorage.getItem("adminToken") ?? tokenDefault,
+  );
   const [storageInfo, setStorageInfo] = useState<any>(null);
   const [oauthRedirectUri, setOauthRedirectUri] = useState("");
+  const [proxySettings, setProxySettings] = useState<ProxySettings>({
+    routingMode: "quota_aware",
+  });
   const [chatPrompt, setChatPrompt] = useState("Give me a one-line hello");
   const [chatOut, setChatOut] = useState("");
   const [error, setError] = useState("");
@@ -138,7 +174,11 @@ export default function App() {
     () => ({
       total: accounts.length,
       enabled: accounts.filter((account) => account.enabled).length,
-      blocked: accounts.filter((account) => account.state?.blockedUntil && account.state.blockedUntil > Date.now()).length,
+      blocked: accounts.filter(
+        (account) =>
+          account.state?.blockedUntil &&
+          account.state.blockedUntil > Date.now(),
+      ).length,
     }),
     [accounts],
   );
@@ -150,11 +190,23 @@ export default function App() {
     const secondary = accounts
       .map((account) => account.usage?.secondary?.usedPercent)
       .filter((value): value is number => typeof value === "number");
-    const avg = (values: number[]) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0);
-    const accountScoped = accounts.filter((account) => account.usage?.scope === "account").length;
-    const degraded = accounts.filter((account) => account.usage?.scope === "unscoped").length;
-    const unsupported = accounts.filter((account) => account.usage?.scope === "unsupported").length;
-    const freshestAt = accounts.reduce((latest, account) => Math.max(latest, account.usage?.fetchedAt ?? 0), 0);
+    const avg = (values: number[]) =>
+      values.length
+        ? values.reduce((sum, value) => sum + value, 0) / values.length
+        : 0;
+    const accountScoped = accounts.filter(
+      (account) => account.usage?.scope === "account",
+    ).length;
+    const degraded = accounts.filter(
+      (account) => account.usage?.scope === "unscoped",
+    ).length;
+    const unsupported = accounts.filter(
+      (account) => account.usage?.scope === "unsupported",
+    ).length;
+    const freshestAt = accounts.reduce(
+      (latest, account) => Math.max(latest, account.usage?.fetchedAt ?? 0),
+      0,
+    );
 
     return {
       primaryAvg: avg(primary),
@@ -182,7 +234,10 @@ export default function App() {
   );
 
   const modelChartData = useMemo(
-    () => filteredTracingTraceStats.models.slice(0, 8).map((model) => ({ ...model, label: model.model })),
+    () =>
+      filteredTracingTraceStats.models
+        .slice(0, 8)
+        .map((model) => ({ ...model, label: model.model })),
     [filteredTracingTraceStats.models],
   );
   const modelCostChartData = useMemo(
@@ -199,8 +254,16 @@ export default function App() {
         ...bucket,
         label:
           tracingRange === "24h"
-            ? new Date(bucket.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-            : new Date(bucket.at).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+            ? new Date(bucket.at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : new Date(bucket.at).toLocaleDateString([], {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
       })),
     [filteredTracingTraceStats.timeseries, tracingRange],
   );
@@ -211,7 +274,11 @@ export default function App() {
           sum +
           (typeof trace.costUsd === "number"
             ? trace.costUsd
-            : (estimateCostUsd(trace.model, trace.tokensInput ?? 0, trace.tokensOutput ?? 0) ?? 0)),
+            : (estimateCostUsd(
+                trace.model,
+                trace.tokensInput ?? 0,
+                trace.tokensOutput ?? 0,
+              ) ?? 0)),
         0,
       ),
     [traces],
@@ -244,6 +311,9 @@ export default function App() {
     setAccounts((acc.accounts ?? []) as Account[]);
     setStorageInfo(cfg.storage ?? null);
     setOauthRedirectUri(String(cfg.oauthRedirectUri ?? ""));
+    setProxySettings(
+      (cfg.proxySettings ?? { routingMode: "quota_aware" }) as ProxySettings,
+    );
     setModels((mdl.data ?? []) as ExposedModel[]);
     setAliases((aliasRes.modelAliases ?? []) as ModelAlias[]);
   };
@@ -263,7 +333,9 @@ export default function App() {
             method: "PATCH",
             body: JSON.stringify(next),
           });
-          setDashboardPreferences(normalizeDashboardPreferences(res.preferences));
+          setDashboardPreferences(
+            normalizeDashboardPreferences(res.preferences),
+          );
         } catch (e: any) {
           setError(e?.message ?? String(e));
         }
@@ -288,7 +360,9 @@ export default function App() {
       api(`/admin/stats/usage?${params.toString()}`),
     ]);
     setOverviewTraceStats((statsRes.stats ?? EMPTY_TRACE_STATS) as TraceStats);
-    setOverviewUsageStats((usageRes ?? EMPTY_TRACE_USAGE_STATS) as TraceUsageStats);
+    setOverviewUsageStats(
+      (usageRes ?? EMPTY_TRACE_USAGE_STATS) as TraceUsageStats,
+    );
   };
 
   const loadAccountsAnalytics = async (range: TraceRangePreset) => {
@@ -298,10 +372,15 @@ export default function App() {
       api(`/admin/stats/usage?${params.toString()}`),
     ]);
     setAccountsTraceStats((statsRes.stats ?? EMPTY_TRACE_STATS) as TraceStats);
-    setAccountsUsageStats((usageRes ?? EMPTY_TRACE_USAGE_STATS) as TraceUsageStats);
+    setAccountsUsageStats(
+      (usageRes ?? EMPTY_TRACE_USAGE_STATS) as TraceUsageStats,
+    );
   };
 
-  const loadTracing = async (page: number, range: TraceRangePreset = tracingRange) => {
+  const loadTracing = async (
+    page: number,
+    range: TraceRangePreset = tracingRange,
+  ) => {
     const safePage = Math.max(1, page || 1);
     const params = buildRangeParams(range);
     params.set("page", String(safePage));
@@ -314,9 +393,18 @@ export default function App() {
     ]);
 
     setTraces((tr.traces ?? []) as Trace[]);
-    setTracingTraceStats((statsRes.stats ?? tr.stats ?? EMPTY_TRACE_STATS) as TraceStats);
-    setTracingUsageStats((usageRes ?? EMPTY_TRACE_USAGE_STATS) as TraceUsageStats);
-    setTracePagination((tr.pagination ?? { ...EMPTY_TRACE_PAGINATION, page: safePage }) as TracePagination);
+    setTracingTraceStats(
+      (statsRes.stats ?? tr.stats ?? EMPTY_TRACE_STATS) as TraceStats,
+    );
+    setTracingUsageStats(
+      (usageRes ?? EMPTY_TRACE_USAGE_STATS) as TraceUsageStats,
+    );
+    setTracePagination(
+      (tr.pagination ?? {
+        ...EMPTY_TRACE_PAGINATION,
+        page: safePage,
+      }) as TracePagination,
+    );
     setExpandedTraceId(null);
     setExpandedTrace(null);
   };
@@ -383,13 +471,18 @@ export default function App() {
   useEffect(() => {
     if (!preferencesLoaded) return;
     const timer = window.setInterval(() => {
-      void refreshActiveTab().catch((e: any) => setError(e?.message ?? String(e)));
+      void refreshActiveTab().catch((e: any) =>
+        setError(e?.message ?? String(e)),
+      );
     }, ACTIVE_TAB_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [preferencesLoaded, tab, overviewRange, accountsRange, tracingRange]);
 
   const patch = async (id: string, body: any) => {
-    await api(`/admin/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+    await api(`/admin/accounts/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
     await refreshData();
   };
 
@@ -411,7 +504,21 @@ export default function App() {
   };
 
   const createAccount = async (body: any) => {
-    await api("/admin/accounts", { method: "POST", body: JSON.stringify(body) });
+    await api("/admin/accounts", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    await refreshData();
+  };
+
+  const patchProxySettings = async (body: Partial<ProxySettings>) => {
+    const res = await api("/admin/config", {
+      method: "PATCH",
+      body: JSON.stringify({ proxySettings: body }),
+    });
+    setProxySettings(
+      (res.proxySettings ?? { routingMode: "quota_aware" }) as ProxySettings,
+    );
     await refreshData();
   };
 
@@ -469,7 +576,10 @@ export default function App() {
       }),
     });
     const body = await response.json();
-    setChatOut((body?.choices?.[0]?.message?.content as string) || JSON.stringify(body, null, 2));
+    setChatOut(
+      (body?.choices?.[0]?.message?.content as string) ||
+        JSON.stringify(body, null, 2),
+    );
   };
 
   const gotoTracePage = async (page: number) => {
@@ -539,7 +649,10 @@ export default function App() {
     }
   };
 
-  const setTabRange = (key: "overview" | "accounts" | "tracing", range: TraceRangePreset) => {
+  const setTabRange = (
+    key: "overview" | "accounts" | "tracing",
+    range: TraceRangePreset,
+  ) => {
     if (key === "tracing") {
       tracePageRef.current = 1;
       setTracePagination((current) => ({ ...current, page: 1 }));
@@ -560,12 +673,19 @@ export default function App() {
     }));
   };
 
-  const moveAccountsSection = (sectionId: AccountsSectionId, direction: -1 | 1) => {
+  const moveAccountsSection = (
+    sectionId: AccountsSectionId,
+    direction: -1 | 1,
+  ) => {
     updateDashboardPreferences((current) => ({
       ...current,
       accounts: {
         ...current.accounts,
-        sectionOrder: moveItem(current.accounts.sectionOrder, sectionId, direction),
+        sectionOrder: moveItem(
+          current.accounts.sectionOrder,
+          sectionId,
+          direction,
+        ),
       },
     }));
   };
@@ -620,7 +740,9 @@ export default function App() {
     }));
   };
 
-  const setTopSessionsSort = (sort: DashboardPreferences["tracing"]["topSessionsSort"]) => {
+  const setTopSessionsSort = (
+    sort: DashboardPreferences["tracing"]["topSessionsSort"],
+  ) => {
     updateDashboardPreferences((current) => ({
       ...current,
       tracing: {
@@ -631,7 +753,10 @@ export default function App() {
   };
 
   const resetTabOrder = () => {
-    updateDashboardPreferences((current) => ({ ...current, tabOrder: DEFAULT_TAB_ORDER }));
+    updateDashboardPreferences((current) => ({
+      ...current,
+      tabOrder: DEFAULT_TAB_ORDER,
+    }));
   };
 
   const resetAccountsLayout = () => {
@@ -656,7 +781,9 @@ export default function App() {
     }));
   };
 
-  const tabOrderChanged = orderedTabs.some((tabId, index) => tabId !== DEFAULT_TAB_ORDER[index]);
+  const tabOrderChanged = orderedTabs.some(
+    (tabId, index) => tabId !== DEFAULT_TAB_ORDER[index],
+  );
 
   return (
     <div className="page">
@@ -664,8 +791,14 @@ export default function App() {
         <header className="topbar panel">
           <div>
             <h1>Multivibe</h1>
-            <p className="muted">Quota-aware, multi-provider router with OAuth onboarding and tracing.</p>
-            <p className="muted">Active tab refreshes live every 10s. Layout and range preferences are saved globally.</p>
+            <p className="muted">
+              Quota-aware, multi-provider router with OAuth onboarding and
+              tracing.
+            </p>
+            <p className="muted">
+              Active tab refreshes live every 10s. Layout and range preferences
+              are saved globally.
+            </p>
           </div>
           <div className="inline wrap">
             <input
@@ -674,7 +807,10 @@ export default function App() {
               onBlur={() => localStorage.setItem("adminToken", adminToken)}
               placeholder="Admin token"
             />
-            <button className="btn secondary" onClick={() => void refreshData()}>
+            <button
+              className="btn secondary"
+              onClick={() => void refreshData()}
+            >
               Refresh data
             </button>
           </div>
@@ -684,16 +820,27 @@ export default function App() {
           <div className="inline wrap row-between">
             <div className="inline wrap">
               {orderedTabs.map((tabId) => (
-                <button key={tabId} className={tab === tabId ? "tab active" : "tab"} onClick={() => setTab(tabId)}>
+                <button
+                  key={tabId}
+                  className={tab === tabId ? "tab active" : "tab"}
+                  onClick={() => setTab(tabId)}
+                >
                   {titleForTab(tabId)}
                 </button>
               ))}
             </div>
             <div className="inline wrap">
-              <button className="btn ghost small" onClick={() => setTabLayoutEditMode((current) => !current)}>
+              <button
+                className="btn ghost small"
+                onClick={() => setTabLayoutEditMode((current) => !current)}
+              >
                 {tabLayoutEditMode ? "Done editing tabs" : "Edit tabs"}
               </button>
-              <button className="btn secondary small" onClick={resetTabOrder} disabled={!tabOrderChanged}>
+              <button
+                className="btn secondary small"
+                onClick={resetTabOrder}
+                disabled={!tabOrderChanged}
+              >
                 Reset tabs
               </button>
             </div>
@@ -704,7 +851,11 @@ export default function App() {
                 <div key={tabId} className="layout-editor-row">
                   <span>{titleForTab(tabId)}</span>
                   <div className="inline wrap">
-                    <button className="btn ghost small" onClick={() => moveTopTab(tabId, -1)} disabled={index === 0}>
+                    <button
+                      className="btn ghost small"
+                      onClick={() => moveTopTab(tabId, -1)}
+                      disabled={index === 0}
+                    >
                       Earlier
                     </button>
                     <button
@@ -752,6 +903,8 @@ export default function App() {
             unblock={unblock}
             refreshUsage={refreshUsage}
             createAccount={createAccount}
+            proxySettings={proxySettings}
+            patchProxySettings={patchProxySettings}
             startOAuth={startOAuth}
             completeOAuth={completeOAuth}
             oauthRedirectUri={oauthRedirectUri}
@@ -805,7 +958,9 @@ export default function App() {
           />
         )}
 
-        {tab === "docs" && <DocsTab totalTraceCostFromRows={totalTraceCostFromRows} />}
+        {tab === "docs" && (
+          <DocsTab totalTraceCostFromRows={totalTraceCostFromRows} />
+        )}
 
         {error && <div className="panel error">{error}</div>}
       </div>

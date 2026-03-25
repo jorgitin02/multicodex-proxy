@@ -263,11 +263,11 @@ function addTraceToAggregate(agg: UsageAggregate, trace: TraceEntry) {
   const costUsd =
     typeof trace.costUsd === "number"
       ? trace.costUsd
-      : estimateCostUsd(
+      : (estimateCostUsd(
           trace.model,
           trace.tokensInput ?? 0,
           trace.tokensOutput ?? 0,
-        ) ?? 0;
+        ) ?? 0);
 
   agg.requests += 1;
   if (status >= 200 && status < 400) agg.ok += 1;
@@ -480,22 +480,27 @@ export function createTraceManager(config: TraceManagerConfig) {
 
   async function readTraceFileFromDisk(): Promise<TraceEntry[]> {
     try {
-      const fileHandle = await fs.open(filePath, 'r');
+      const fileHandle = await fs.open(filePath, "r");
       const parsed: TraceEntry[] = [];
       let position = 0;
       let buffer = Buffer.alloc(65536); // 64KB buffer
-      let remaining = '';
-      
+      let remaining = "";
+
       try {
         while (true) {
-          const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, position);
+          const { bytesRead } = await fileHandle.read(
+            buffer,
+            0,
+            buffer.length,
+            position,
+          );
           if (bytesRead === 0) break;
-          
+
           position += bytesRead;
-          const chunk = remaining + buffer.toString('utf8', 0, bytesRead);
-          const lines = chunk.split('\n');
-          remaining = lines.pop() || '';
-          
+          const chunk = remaining + buffer.toString("utf8", 0, bytesRead);
+          const lines = chunk.split("\n");
+          remaining = lines.pop() || "";
+
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
@@ -504,7 +509,7 @@ export function createTraceManager(config: TraceManagerConfig) {
             } catch {}
           }
         }
-        
+
         // Process any remaining data
         if (remaining.trim()) {
           try {
@@ -512,11 +517,10 @@ export function createTraceManager(config: TraceManagerConfig) {
             if (normalized) parsed.push(normalized);
           } catch {}
         }
-        
       } finally {
         await fileHandle.close();
       }
-      
+
       return parsed.slice(-retentionMax); // Ensure we don't exceed retention
     } catch {
       return [];
@@ -525,22 +529,27 @@ export function createTraceManager(config: TraceManagerConfig) {
 
   async function readStatsHistoryFileFromDisk(): Promise<TraceEntry[]> {
     try {
-      const fileHandle = await fs.open(historyFilePath, 'r');
+      const fileHandle = await fs.open(historyFilePath, "r");
       const parsed: TraceEntry[] = [];
       let position = 0;
       let buffer = Buffer.alloc(65536); // 64KB buffer
-      let remaining = '';
-      
+      let remaining = "";
+
       try {
         while (true) {
-          const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, position);
+          const { bytesRead } = await fileHandle.read(
+            buffer,
+            0,
+            buffer.length,
+            position,
+          );
           if (bytesRead === 0) break;
-          
+
           position += bytesRead;
-          const chunk = remaining + buffer.toString('utf8', 0, bytesRead);
-          const lines = chunk.split('\n');
-          remaining = lines.pop() || '';
-          
+          const chunk = remaining + buffer.toString("utf8", 0, bytesRead);
+          const lines = chunk.split("\n");
+          remaining = lines.pop() || "";
+
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
@@ -549,7 +558,7 @@ export function createTraceManager(config: TraceManagerConfig) {
             } catch {}
           }
         }
-        
+
         // Process any remaining data
         if (remaining.trim()) {
           try {
@@ -557,11 +566,10 @@ export function createTraceManager(config: TraceManagerConfig) {
             if (normalized) parsed.push(normalized);
           } catch {}
         }
-        
       } finally {
         await fileHandle.close();
       }
-      
+
       return parsed;
     } catch {
       return [];
@@ -586,7 +594,7 @@ export function createTraceManager(config: TraceManagerConfig) {
     const tmp = `${filePath}.tmp-${randomUUID()}`;
     const BATCH_SIZE = 1000;
     const MAX_ENTRY_SIZE = 1024 * 1024; // 1MB per entry max
-    const fileHandle = await fs.open(tmp, 'w');
+    const fileHandle = await fs.open(tmp, "w");
     try {
       for (let i = 0; i < entries.length; i += BATCH_SIZE) {
         const batch = entries.slice(i, i + BATCH_SIZE);
@@ -594,13 +602,15 @@ export function createTraceManager(config: TraceManagerConfig) {
         for (const entry of batch) {
           const json = JSON.stringify(entry);
           if (json.length > MAX_ENTRY_SIZE) {
-            console.warn(`Skipping oversized trace entry (${json.length} bytes)`);
+            console.warn(
+              `Skipping oversized trace entry (${json.length} bytes)`,
+            );
             continue;
           }
           batchLines.push(json);
         }
         if (batchLines.length > 0) {
-          const batchContent = batchLines.join('\n') + '\n';
+          const batchContent = batchLines.join("\n") + "\n";
           await fileHandle.writeFile(batchContent);
         }
       }
@@ -706,12 +716,12 @@ export function createTraceManager(config: TraceManagerConfig) {
       if (existing.trim()) return;
     } catch {}
     if (!traceCache.length) return;
-    
+
     const BATCH_SIZE = 1000;
     const MAX_ENTRY_SIZE = 1024 * 1024; // 1MB per entry max
-    const fileHandle = await fs.open(historyFilePath, 'w');
+    const fileHandle = await fs.open(historyFilePath, "w");
     const historyEntries: TraceEntry[] = [];
-    
+
     try {
       for (let i = 0; i < traceCache.length; i += BATCH_SIZE) {
         const batch = traceCache.slice(i, i + BATCH_SIZE);
@@ -720,7 +730,9 @@ export function createTraceManager(config: TraceManagerConfig) {
           const statsEntry = toStatsHistoryEntry(entry);
           const json = JSON.stringify(statsEntry);
           if (json.length > MAX_ENTRY_SIZE) {
-            console.warn(`Skipping oversized history entry (${json.length} bytes)`);
+            console.warn(
+              `Skipping oversized history entry (${json.length} bytes)`,
+            );
             continue;
           }
           batchLines.push(json);
@@ -730,14 +742,14 @@ export function createTraceManager(config: TraceManagerConfig) {
           }
         }
         if (batchLines.length > 0) {
-          const batchContent = batchLines.join('\n') + '\n';
+          const batchContent = batchLines.join("\n") + "\n";
           await fileHandle.writeFile(batchContent);
         }
       }
     } finally {
       await fileHandle.close();
     }
-    
+
     statsCache.splice(0, statsCache.length, ...historyEntries);
   }
 
@@ -750,7 +762,10 @@ export function createTraceManager(config: TraceManagerConfig) {
 
   function queueCompactionIfNeeded() {
     if (compactionQueued) return;
-    if (traceCache.length <= retentionMax && appendSinceCompaction < TRACE_COMPACTION_INTERVAL) {
+    if (
+      traceCache.length <= retentionMax &&
+      appendSinceCompaction < TRACE_COMPACTION_INTERVAL
+    ) {
       return;
     }
     compactionQueued = true;

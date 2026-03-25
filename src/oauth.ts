@@ -41,8 +41,13 @@ export function createOAuthState(
   };
 }
 
-export function buildAuthorizationUrl(config: OAuthConfig, flow: OAuthFlowState): string {
-  const challenge = base64url(createHash("sha256").update(flow.codeVerifier).digest());
+export function buildAuthorizationUrl(
+  config: OAuthConfig,
+  flow: OAuthFlowState,
+): string {
+  const challenge = base64url(
+    createHash("sha256").update(flow.codeVerifier).digest(),
+  );
   const url = new URL(config.authorizationUrl);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
@@ -59,7 +64,10 @@ export function buildAuthorizationUrl(config: OAuthConfig, flow: OAuthFlowState)
   return url.toString();
 }
 
-export function parseAuthorizationInput(input: string): { code?: string; state?: string } {
+export function parseAuthorizationInput(input: string): {
+  code?: string;
+  state?: string;
+} {
   const value = input.trim();
   if (!value) return {};
 
@@ -89,7 +97,10 @@ export function parseAuthorizationInput(input: string): { code?: string; state?:
   return { code: value };
 }
 
-async function postForm(url: string, body: URLSearchParams): Promise<TokenResponse> {
+async function postForm(
+  url: string,
+  body: URLSearchParams,
+): Promise<TokenResponse> {
   const signal = AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS);
   const res = await fetch(url, {
     method: "POST",
@@ -99,11 +110,18 @@ async function postForm(url: string, body: URLSearchParams): Promise<TokenRespon
   });
 
   const text = await res.text();
-  if (!res.ok) throw new Error(`token endpoint failed ${res.status}: ${text.slice(0, 400)}`);
+  if (!res.ok)
+    throw new Error(
+      `token endpoint failed ${res.status}: ${text.slice(0, 400)}`,
+    );
   return JSON.parse(text) as TokenResponse;
 }
 
-export async function exchangeCodeForToken(config: OAuthConfig, code: string, codeVerifier: string): Promise<TokenResponse> {
+export async function exchangeCodeForToken(
+  config: OAuthConfig,
+  code: string,
+  codeVerifier: string,
+): Promise<TokenResponse> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: config.clientId,
@@ -114,7 +132,10 @@ export async function exchangeCodeForToken(config: OAuthConfig, code: string, co
   return postForm(config.tokenUrl, body);
 }
 
-export async function refreshAccessToken(config: OAuthConfig, refreshToken: string): Promise<TokenResponse> {
+export async function refreshAccessToken(
+  config: OAuthConfig,
+  refreshToken: string,
+): Promise<TokenResponse> {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     client_id: config.clientId,
@@ -134,20 +155,29 @@ function decodeJwtPayload(jwt: string | undefined): any {
   }
 }
 
-export function mergeTokenIntoAccount(account: Account, tokenData: TokenResponse): Account {
+export function mergeTokenIntoAccount(
+  account: Account,
+  tokenData: TokenResponse,
+): Account {
   const idToken = decodeJwtPayload(tokenData.id_token);
-  const expiresAt = tokenData.expires_in ? Date.now() + tokenData.expires_in * 1000 : account.expiresAt;
+  const expiresAt = tokenData.expires_in
+    ? Date.now() + tokenData.expires_in * 1000
+    : account.expiresAt;
   return {
     ...account,
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token ?? account.refreshToken,
     expiresAt,
-    chatgptAccountId: tokenData.account_id ?? idToken?.account_id ?? account.chatgptAccountId,
+    chatgptAccountId:
+      tokenData.account_id ?? idToken?.account_id ?? account.chatgptAccountId,
     email: account.email ?? idToken?.email,
   };
 }
 
-export function accountFromOAuth(flow: OAuthFlowState, tokenData: TokenResponse): Account {
+export function accountFromOAuth(
+  flow: OAuthFlowState,
+  tokenData: TokenResponse,
+): Account {
   const idToken = decodeJwtPayload(tokenData.id_token);
   const chatgptAccountId = tokenData.account_id ?? idToken?.account_id;
   return {
@@ -155,7 +185,9 @@ export function accountFromOAuth(flow: OAuthFlowState, tokenData: TokenResponse)
     email: flow.email || idToken?.email,
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token,
-    expiresAt: tokenData.expires_in ? Date.now() + tokenData.expires_in * 1000 : undefined,
+    expiresAt: tokenData.expires_in
+      ? Date.now() + tokenData.expires_in * 1000
+      : undefined,
     chatgptAccountId,
     enabled: true,
     priority: 0,

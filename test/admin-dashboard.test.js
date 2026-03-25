@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { createTempDir, startHttpServer, startRuntime, writeJson } from "./helpers.js";
+import {
+  createTempDir,
+  startHttpServer,
+  startRuntime,
+  writeJson,
+} from "./helpers.js";
 
 async function createRuntimeWithStore(tmp, extra = {}) {
   const storePath = path.join(tmp, "accounts.json");
@@ -29,9 +34,12 @@ test("dashboard preferences are normalized, persisted, and reloaded through admi
   const { runtime, storePath } = await createRuntimeWithStore(tmp);
 
   try {
-    const initialRes = await fetch(`${runtime.baseUrl}/admin/dashboard-preferences`, {
-      headers: { "x-admin-token": "test-admin" },
-    });
+    const initialRes = await fetch(
+      `${runtime.baseUrl}/admin/dashboard-preferences`,
+      {
+        headers: { "x-admin-token": "test-admin" },
+      },
+    );
     assert.equal(initialRes.status, 200);
     const initialBody = await initialRes.json();
     assert.deepEqual(initialBody.preferences.ranges, {
@@ -50,22 +58,30 @@ test("dashboard preferences are normalized, persisted, and reloaded through admi
       "docs",
     ]);
 
-    const patchRes = await fetch(`${runtime.baseUrl}/admin/dashboard-preferences`, {
-      method: "PATCH",
-      headers: {
-        "content-type": "application/json",
-        "x-admin-token": "test-admin",
-      },
-      body: JSON.stringify({
-        tabOrder: ["tracing", "overview", "tracing", "bogus"],
-        ranges: { overview: "30d", accounts: "24h" },
-        tracing: {
-          graphsHidden: true,
-          hiddenCards: ["usageByRoute", "unknown"],
-          cardOrder: ["usageByRoute", "tokensOverTime", "usageByRoute", "bad"],
+    const patchRes = await fetch(
+      `${runtime.baseUrl}/admin/dashboard-preferences`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "test-admin",
         },
-      }),
-    });
+        body: JSON.stringify({
+          tabOrder: ["tracing", "overview", "tracing", "bogus"],
+          ranges: { overview: "30d", accounts: "24h" },
+          tracing: {
+            graphsHidden: true,
+            hiddenCards: ["usageByRoute", "unknown"],
+            cardOrder: [
+              "usageByRoute",
+              "tokensOverTime",
+              "usageByRoute",
+              "bad",
+            ],
+          },
+        }),
+      },
+    );
 
     assert.equal(patchRes.status, 200);
     const patchBody = await patchRes.json();
@@ -73,32 +89,75 @@ test("dashboard preferences are normalized, persisted, and reloaded through admi
     assert.equal(patchBody.preferences.ranges.accounts, "24h");
     assert.equal(patchBody.preferences.ranges.tracing, "7d");
     assert.equal(patchBody.preferences.tracing.graphsHidden, true);
-    assert.deepEqual(patchBody.preferences.tracing.hiddenCards, ["usageByRoute"]);
-    assert.deepEqual(
-      patchBody.preferences.tracing.cardOrder.slice(0, 2),
-      ["usageByRoute", "tokensOverTime"],
-    );
-    assert.deepEqual(
-      patchBody.preferences.tabOrder.slice(0, 3),
-      ["tracing", "overview", "accounts"],
-    );
+    assert.deepEqual(patchBody.preferences.tracing.hiddenCards, [
+      "usageByRoute",
+    ]);
+    assert.deepEqual(patchBody.preferences.tracing.cardOrder.slice(0, 2), [
+      "usageByRoute",
+      "tokensOverTime",
+    ]);
+    assert.deepEqual(patchBody.preferences.tabOrder.slice(0, 3), [
+      "tracing",
+      "overview",
+      "accounts",
+    ]);
 
     await runtime.runtime.store.flushIfDirty();
     const store = JSON.parse(await readFile(storePath, "utf8"));
     assert.equal(store.dashboardPreferences.ranges.overview, "30d");
     assert.equal(store.dashboardPreferences.tracing.graphsHidden, true);
 
-    const reloadRes = await fetch(`${runtime.baseUrl}/admin/dashboard-preferences`, {
-      headers: { "x-admin-token": "test-admin" },
-    });
+    const reloadRes = await fetch(
+      `${runtime.baseUrl}/admin/dashboard-preferences`,
+      {
+        headers: { "x-admin-token": "test-admin" },
+      },
+    );
     assert.equal(reloadRes.status, 200);
     const reloadBody = await reloadRes.json();
     assert.equal(reloadBody.preferences.ranges.accounts, "24h");
     assert.equal(reloadBody.preferences.tracing.graphsHidden, true);
-    assert.deepEqual(
-      reloadBody.preferences.tabOrder.slice(0, 3),
-      ["tracing", "overview", "accounts"],
-    );
+    assert.deepEqual(reloadBody.preferences.tabOrder.slice(0, 3), [
+      "tracing",
+      "overview",
+      "accounts",
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("admin config exposes and persists proxy routing mode", async () => {
+  const tmp = await createTempDir();
+  const { runtime, storePath } = await createRuntimeWithStore(tmp);
+
+  try {
+    const initialRes = await fetch(`${runtime.baseUrl}/admin/config`, {
+      headers: { "x-admin-token": "test-admin" },
+    });
+    assert.equal(initialRes.status, 200);
+    const initialBody = await initialRes.json();
+    assert.equal(initialBody.proxySettings.routingMode, "quota_aware");
+
+    const patchRes = await fetch(`${runtime.baseUrl}/admin/config`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-admin-token": "test-admin",
+      },
+      body: JSON.stringify({
+        proxySettings: {
+          routingMode: "round_robin",
+        },
+      }),
+    });
+    assert.equal(patchRes.status, 200);
+    const patchBody = await patchRes.json();
+    assert.equal(patchBody.proxySettings.routingMode, "round_robin");
+
+    await runtime.runtime.store.flushIfDirty();
+    const store = JSON.parse(await readFile(storePath, "utf8"));
+    assert.equal(store.proxySettings.routingMode, "round_robin");
   } finally {
     await runtime.close();
   }
@@ -148,10 +207,13 @@ test("refreshing usage without chatgpt account id marks the provider quota snaps
   });
 
   try {
-    const res = await fetch(`${runtime.baseUrl}/admin/accounts/acct-1/refresh-usage`, {
-      method: "POST",
-      headers: { "x-admin-token": "test-admin" },
-    });
+    const res = await fetch(
+      `${runtime.baseUrl}/admin/accounts/acct-1/refresh-usage`,
+      {
+        method: "POST",
+        headers: { "x-admin-token": "test-admin" },
+      },
+    );
 
     assert.equal(res.status, 200);
     const body = await res.json();

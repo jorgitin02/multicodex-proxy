@@ -1,0 +1,11 @@
+{
+  "threshold": 2,
+  "reporters": ["console"],
+  "pattern": [
+    "src/**/*.ts",
+    "web/src/**/*.ts",
+    "web/src/**/*.tsx",
+    "test/**/*.js"
+  ],
+  "ignore": ["**/*.d.ts"]
+}

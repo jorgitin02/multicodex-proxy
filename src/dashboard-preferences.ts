@@ -68,7 +68,9 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
 const VALID_RANGES = new Set<DashboardRangePreset>(["24h", "7d", "30d", "all"]);
 const VALID_TABS = new Set<DashboardTabId>(DEFAULT_TAB_ORDER);
 const VALID_TRACING_CARDS = new Set<TracingCardId>(DEFAULT_TRACING_CARD_ORDER);
-const VALID_ACCOUNT_SECTIONS = new Set<AccountsSectionId>(DEFAULT_ACCOUNTS_SECTION_ORDER);
+const VALID_ACCOUNT_SECTIONS = new Set<AccountsSectionId>(
+  DEFAULT_ACCOUNTS_SECTION_ORDER,
+);
 const VALID_TOP_SESSION_KEYS = new Set<TopSessionsSortKey>([
   "requests",
   "tokens",
@@ -76,9 +78,16 @@ const VALID_TOP_SESSION_KEYS = new Set<TopSessionsSortKey>([
   "avgLatencyMs",
   "lastAt",
 ]);
-const VALID_TOP_SESSION_DIRECTIONS = new Set<TopSessionsSortDirection>(["asc", "desc"]);
+const VALID_TOP_SESSION_DIRECTIONS = new Set<TopSessionsSortDirection>([
+  "asc",
+  "desc",
+]);
 
-function normalizeOrderedList<T extends string>(input: unknown, defaults: T[], valid: Set<T>): T[] {
+function normalizeOrderedList<T extends string>(
+  input: unknown,
+  defaults: T[],
+  valid: Set<T>,
+): T[] {
   const raw = Array.isArray(input) ? input : [];
   const ordered: T[] = [];
 
@@ -108,16 +117,24 @@ function normalizeSubset<T extends string>(input: unknown, valid: Set<T>): T[] {
   return next;
 }
 
-function normalizeRange(input: unknown, fallback: DashboardRangePreset): DashboardRangePreset {
-  return typeof input === "string" && VALID_RANGES.has(input as DashboardRangePreset)
+function normalizeRange(
+  input: unknown,
+  fallback: DashboardRangePreset,
+): DashboardRangePreset {
+  return typeof input === "string" &&
+    VALID_RANGES.has(input as DashboardRangePreset)
     ? (input as DashboardRangePreset)
     : fallback;
 }
 
 function normalizeTopSessionsSort(input: unknown): TopSessionsSortState {
-  const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const raw =
+    input && typeof input === "object"
+      ? (input as Record<string, unknown>)
+      : {};
   const key =
-    typeof raw.key === "string" && VALID_TOP_SESSION_KEYS.has(raw.key as TopSessionsSortKey)
+    typeof raw.key === "string" &&
+    VALID_TOP_SESSION_KEYS.has(raw.key as TopSessionsSortKey)
       ? (raw.key as TopSessionsSortKey)
       : DEFAULT_TOP_SESSIONS_SORT.key;
   const direction =
@@ -128,18 +145,41 @@ function normalizeTopSessionsSort(input: unknown): TopSessionsSortState {
   return { key, direction };
 }
 
-export function normalizeDashboardPreferences(input: unknown): DashboardPreferences {
-  const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const ranges = raw.ranges && typeof raw.ranges === "object" ? (raw.ranges as Record<string, unknown>) : {};
-  const tracing = raw.tracing && typeof raw.tracing === "object" ? (raw.tracing as Record<string, unknown>) : {};
-  const accounts = raw.accounts && typeof raw.accounts === "object" ? (raw.accounts as Record<string, unknown>) : {};
+export function normalizeDashboardPreferences(
+  input: unknown,
+): DashboardPreferences {
+  const raw =
+    input && typeof input === "object"
+      ? (input as Record<string, unknown>)
+      : {};
+  const ranges =
+    raw.ranges && typeof raw.ranges === "object"
+      ? (raw.ranges as Record<string, unknown>)
+      : {};
+  const tracing =
+    raw.tracing && typeof raw.tracing === "object"
+      ? (raw.tracing as Record<string, unknown>)
+      : {};
+  const accounts =
+    raw.accounts && typeof raw.accounts === "object"
+      ? (raw.accounts as Record<string, unknown>)
+      : {};
 
   return {
     tabOrder: normalizeOrderedList(raw.tabOrder, DEFAULT_TAB_ORDER, VALID_TABS),
     ranges: {
-      overview: normalizeRange(ranges.overview, DEFAULT_DASHBOARD_PREFERENCES.ranges.overview),
-      accounts: normalizeRange(ranges.accounts, DEFAULT_DASHBOARD_PREFERENCES.ranges.accounts),
-      tracing: normalizeRange(ranges.tracing, DEFAULT_DASHBOARD_PREFERENCES.ranges.tracing),
+      overview: normalizeRange(
+        ranges.overview,
+        DEFAULT_DASHBOARD_PREFERENCES.ranges.overview,
+      ),
+      accounts: normalizeRange(
+        ranges.accounts,
+        DEFAULT_DASHBOARD_PREFERENCES.ranges.accounts,
+      ),
+      tracing: normalizeRange(
+        ranges.tracing,
+        DEFAULT_DASHBOARD_PREFERENCES.ranges.tracing,
+      ),
     },
     tracing: {
       cardOrder: normalizeOrderedList(
@@ -157,7 +197,10 @@ export function normalizeDashboardPreferences(input: unknown): DashboardPreferen
         DEFAULT_ACCOUNTS_SECTION_ORDER,
         VALID_ACCOUNT_SECTIONS,
       ),
-      hiddenSections: normalizeSubset(accounts.hiddenSections, VALID_ACCOUNT_SECTIONS),
+      hiddenSections: normalizeSubset(
+        accounts.hiddenSections,
+        VALID_ACCOUNT_SECTIONS,
+      ),
     },
   };
 }
@@ -166,7 +209,10 @@ export function mergeDashboardPreferences(
   current: DashboardPreferences,
   patch: unknown,
 ): DashboardPreferences {
-  const raw = patch && typeof patch === "object" ? (patch as Record<string, unknown>) : {};
+  const raw =
+    patch && typeof patch === "object"
+      ? (patch as Record<string, unknown>)
+      : {};
   const rawTracing =
     raw.tracing && typeof raw.tracing === "object"
       ? (raw.tracing as Record<string, unknown>)

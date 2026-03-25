@@ -1,7 +1,11 @@
 import React from "react";
 import { usd } from "../../lib/ui";
 
-export function DocsTab({ totalTraceCostFromRows }: { totalTraceCostFromRows: number }) {
+export function DocsTab({
+  totalTraceCostFromRows,
+}: {
+  totalTraceCostFromRows: number;
+}) {
   return (
     <>
       <section className="panel">
@@ -18,19 +22,36 @@ export function DocsTab({ totalTraceCostFromRows }: { totalTraceCostFromRows: nu
           <li className="mono">PATCH /admin/model-aliases/:id</li>
           <li className="mono">DELETE /admin/model-aliases/:id</li>
           <li className="mono">GET /admin/traces?page=1&amp;pageSize=50</li>
-          <li className="mono">GET /admin/traces?limit=50 (legacy compatibility)</li>
-          <li className="mono">GET /admin/stats/traces?sinceMs=&amp;untilMs=</li>
-          <li className="mono">GET /admin/stats/usage?sinceMs=&amp;untilMs=&amp;accountId=&amp;route=</li>
+          <li className="mono">
+            GET /admin/traces?limit=50 (legacy compatibility)
+          </li>
+          <li className="mono">
+            GET /admin/stats/traces?sinceMs=&amp;untilMs=
+          </li>
+          <li className="mono">
+            GET
+            /admin/stats/usage?sinceMs=&amp;untilMs=&amp;accountId=&amp;route=
+          </li>
           <li className="mono">POST /admin/oauth/start</li>
           <li className="mono">POST /admin/oauth/complete</li>
         </ul>
-        <p className="muted">Admin endpoints require <span className="mono">x-admin-token</span>.</p>
-        <p className="muted">Sanitized mode: use URL flag <span className="mono">?sanitized=1</span>.</p>
+        <p className="muted">
+          Admin endpoints require <span className="mono">x-admin-token</span>.
+        </p>
+        <p className="muted">
+          Sanitized mode: use URL flag{" "}
+          <span className="mono">?sanitized=1</span>.
+        </p>
       </section>
       <section className="panel">
         <h2>Pricing snapshot</h2>
-        <p className="muted">Costs are estimated from input/output tokens using model pricing. UI totals include requests, per-model spend, and global totals.</p>
-        <p className="mono">Current page estimated cost: {usd(totalTraceCostFromRows)}</p>
+        <p className="muted">
+          Costs are estimated from input/output tokens using model pricing. UI
+          totals include requests, per-model spend, and global totals.
+        </p>
+        <p className="mono">
+          Current page estimated cost: {usd(totalTraceCostFromRows)}
+        </p>
       </section>
     </>
   );

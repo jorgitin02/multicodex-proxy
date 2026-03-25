@@ -19,6 +19,13 @@ These rules apply to `/Users/jorgitin/projects/multicodex-proxy`.
 - Reproduce proxy issues with traces or focused tests before changing behavior.
 - For proxy/router fixes, add or update a targeted `node:test` case in `test/proxy-behavior.test.js` when practical.
 - Run the narrowest relevant tests first, then broaden only if the change surface warrants it.
+- Core local commands:
+  - `npm run lint`
+  - `npm run format:check`
+  - `npm run build`
+  - `npm run start`
+  - `npm run test`
+  - `npm run validate`
 
 ## Secrets And Data
 

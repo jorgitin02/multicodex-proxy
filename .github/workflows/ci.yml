@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feat/**
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build with timing
+        run: |
+          start=$(date +%s)
+          npm run build
+          end=$(date +%s)
+          printf '{"buildDurationSeconds":%s}\n' "$((end-start))" > build-performance.json
+
+      - name: Test with coverage and timing
+        run: |
+          start=$(date +%s)
+          npm run test:coverage
+          end=$(date +%s)
+          printf '{"testDurationSeconds":%s}\n' "$((end-start))" > test-performance.json
+
+      - name: Dead code and dependency analysis
+        run: npm run check:dead-code
+
+      - name: Duplicate code detection
+        run: npm run check:duplicates
+
+      - name: Tech debt marker check
+        run: npm run check:tech-debt
+
+      - name: AGENTS.md validation
+        run: npm run validate:agents
+
+      - name: Upload validation metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-metrics
+          path: |
+            build-performance.json
+            test-performance.json
+            coverage

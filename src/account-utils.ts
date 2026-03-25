@@ -18,7 +18,10 @@ export async function ensureValidToken(
   oauthConfig: OAuthConfig,
 ): Promise<Account> {
   if (normalizeProvider(account) !== "openai") return account;
-  if (!account.expiresAt || Date.now() < account.expiresAt - TOKEN_REFRESH_MARGIN_MS)
+  if (
+    !account.expiresAt ||
+    Date.now() < account.expiresAt - TOKEN_REFRESH_MARGIN_MS
+  )
     return account;
   if (!account.refreshToken) return account;
   const refreshToken = account.refreshToken;
@@ -34,10 +37,7 @@ export async function ensureValidToken(
 
   const run = (async () => {
     try {
-      const refreshed = await refreshAccessToken(
-        oauthConfig,
-        refreshToken,
-      );
+      const refreshed = await refreshAccessToken(oauthConfig, refreshToken);
       const merged = mergeTokenIntoAccount(account, refreshed);
       clearAuthFailureState(merged);
       return merged;

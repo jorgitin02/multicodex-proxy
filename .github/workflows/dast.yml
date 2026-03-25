@@ -1,0 +1,40 @@
+name: DAST
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - run: npm ci
+      - run: npm --prefix web ci
+      - run: npm run build
+
+      - name: Start application
+        run: |
+          PORT=4010 STORE_PATH="$RUNNER_TEMP/accounts.json" OAUTH_STATE_PATH="$RUNNER_TEMP/oauth-state.json" TRACE_FILE_PATH="$RUNNER_TEMP/traces.jsonl" TRACE_STATS_HISTORY_PATH="$RUNNER_TEMP/traces-history.jsonl" node dist/server.js > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4010/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/server.log"
+          exit 1
+
+      - name: OWASP ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: http://127.0.0.1:4010
