@@ -264,8 +264,9 @@ export class AccountStore {
     this.inMemoryProxySettings = {
       ...this.inMemoryProxySettings,
       routingMode:
-        patch.routingMode === "round_robin"
-          ? "round_robin"
+        patch.routingMode === "round_robin" ||
+        patch.routingMode === "quota_aware"
+          ? patch.routingMode
           : this.inMemoryProxySettings.routingMode,
     };
     this.dirty = true;

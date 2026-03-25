@@ -155,9 +155,25 @@ test("admin config exposes and persists proxy routing mode", async () => {
     const patchBody = await patchRes.json();
     assert.equal(patchBody.proxySettings.routingMode, "round_robin");
 
+    const revertRes = await fetch(`${runtime.baseUrl}/admin/config`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-admin-token": "test-admin",
+      },
+      body: JSON.stringify({
+        proxySettings: {
+          routingMode: "quota_aware",
+        },
+      }),
+    });
+    assert.equal(revertRes.status, 200);
+    const revertBody = await revertRes.json();
+    assert.equal(revertBody.proxySettings.routingMode, "quota_aware");
+
     await runtime.runtime.store.flushIfDirty();
     const store = JSON.parse(await readFile(storePath, "utf8"));
-    assert.equal(store.proxySettings.routingMode, "round_robin");
+    assert.equal(store.proxySettings.routingMode, "quota_aware");
   } finally {
     await runtime.close();
   }
